@@ -63,10 +63,12 @@ inline void fail(const char* file, int line, const std::string& what) {
         if (!(cond)) ::testing::fail(__FILE__, __LINE__, "CHECK(" #cond ")"); \
     } while (0)
 
+// Значения копируются (а не связываются по ссылке): выражение вида f().member()
+// возвращает ссылку внутрь временного объекта, который умирает в конце объявления.
 #define CHECK_EQ(a, b)                                                           \
     do {                                                                         \
-        const auto& va_ = (a);                                                   \
-        const auto& vb_ = (b);                                                   \
+        const auto va_ = (a);                                                    \
+        const auto vb_ = (b);                                                    \
         if (!(va_ == vb_))                                                       \
             ::testing::fail(__FILE__, __LINE__,                                  \
                             std::string("CHECK_EQ(" #a ", " #b "): ") +          \

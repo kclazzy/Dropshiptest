@@ -33,6 +33,10 @@ endfunction()
 
 add_library(dropship_core STATIC
   src/pricing/PricingEngine.cpp
+  src/db/Connection.cpp
+  src/db/DatabaseManager.cpp
+  src/db/Migrations.cpp
+  src/db/TaskQueue.cpp
 )
 target_include_directories(dropship_core PUBLIC src)
 target_link_libraries(dropship_core PUBLIC SQLite::SQLite3 Threads::Threads)
@@ -45,6 +49,8 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_main.cpp
     tests/test_domain.cpp
     tests/test_pricing.cpp
+    tests/test_database.cpp
+    tests/test_task_queue.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)
