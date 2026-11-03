@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Dropship Local Bridge",
+  "version": "0.1.0",
+  "description": "Связывает браузер с локальным приложением Dropship: импорт товаров, куки поставщиков, автовыкуп.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "alarms", "tabs", "cookies", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["src/content/content-script.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Dropship",
+    "default_popup": "src/popup/popup.html"
+  }
+}
