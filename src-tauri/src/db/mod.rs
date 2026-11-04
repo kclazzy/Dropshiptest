@@ -79,34 +79,55 @@ pub async fn enqueue_task(
     Ok(id)
 }
 
+/// Атомарно забирает самую приоритетную готовую задачу любого типа (см. `dequeue_next_task_of`).
+pub async fn dequeue_next_task(pool: &SqlitePool, now: i64, lock_timeout_secs: i64) -> AppResult<Option<Task>> {
+    dequeue_next_task_of(pool, now, lock_timeout_secs, &[]).await
+}
+
 /// Атомарно забирает самую приоритетную готовую задачу (`priority`, `scheduled_at`, `id`) одним
 /// запросом `UPDATE … RETURNING`. Задачи `IN_PROGRESS` с истёкшей блокировкой (`lock_timeout_secs`)
 /// берутся повторно, пока остались попытки; исчерпавшие попытки помечаются `FAILED`.
-pub async fn dequeue_next_task(pool: &SqlitePool, now: i64, lock_timeout_secs: i64) -> AppResult<Option<Task>> {
+/// Пустой `types` — любой тип; иначе воркер не трогает чужие задачи.
+pub async fn dequeue_next_task_of(
+    pool: &SqlitePool,
+    now: i64,
+    lock_timeout_secs: i64,
+    types: &[TaskType],
+) -> AppResult<Option<Task>> {
     let lock_expired_before = now.saturating_sub(lock_timeout_secs);
-    sqlx::query(
+    // Номера параметров: ?1 — now, ?2 — граница блокировки, далее типы. Сами значения всегда передаются через bind.
+    let type_clause = if types.is_empty() {
+        String::new()
+    } else {
+        let list = (0..types.len()).map(|i| format!("?{}", i + 3)).collect::<Vec<_>>().join(", ");
+        format!(" AND task_type IN ({list})")
+    };
+
+    let fail_sql = format!(
         "UPDATE task_queue SET status = 'FAILED', locked_at = 0, \
          error_log = COALESCE(error_log, 'worker stopped responding') \
-         WHERE status = 'IN_PROGRESS' AND locked_at <= ? AND attempts >= max_attempts",
-    )
-    .bind(lock_expired_before)
-    .execute(pool)
-    .await?;
+         WHERE status = 'IN_PROGRESS' AND locked_at <= ?2 AND attempts >= max_attempts{type_clause}"
+    );
+    let mut fail = sqlx::query(&fail_sql).bind(now).bind(lock_expired_before);
+    for t in types {
+        fail = fail.bind(*t);
+    }
+    fail.execute(pool).await?;
 
-    let task = sqlx::query_as::<_, Task>(
+    let take_sql = format!(
         "UPDATE task_queue SET status = 'IN_PROGRESS', attempts = attempts + 1, locked_at = ?1 \
          WHERE id = ( \
              SELECT id FROM task_queue \
-             WHERE (status = 'PENDING' AND scheduled_at <= ?1) \
-                OR (status = 'IN_PROGRESS' AND locked_at <= ?2 AND attempts < max_attempts) \
+             WHERE ((status = 'PENDING' AND scheduled_at <= ?1) \
+                OR (status = 'IN_PROGRESS' AND locked_at <= ?2 AND attempts < max_attempts)){type_clause} \
              ORDER BY priority ASC, scheduled_at ASC, id ASC LIMIT 1) \
-         RETURNING *",
-    )
-    .bind(now)
-    .bind(lock_expired_before)
-    .fetch_optional(pool)
-    .await?;
-    Ok(task)
+         RETURNING *"
+    );
+    let mut take = sqlx::query_as::<_, Task>(&take_sql).bind(now).bind(lock_expired_before);
+    for t in types {
+        take = take.bind(*t);
+    }
+    Ok(take.fetch_optional(pool).await?)
 }
 
 /// `true`, если именно этот вызов перевёл задачу из `IN_PROGRESS` в `COMPLETED`.

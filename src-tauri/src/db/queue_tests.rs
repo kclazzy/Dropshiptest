@@ -206,3 +206,14 @@ async fn pricing_rule_row_converts_to_a_checked_rule() {
     let store: Store = sqlx::query_as("SELECT * FROM stores").fetch_one(&pool).await.unwrap();
     assert!(!serde_json::to_string(&store).unwrap().contains("encrypted_credentials"));
 }
+
+#[tokio::test]
+async fn workers_only_take_their_own_task_types() {
+    let (_dir, pool) = pool().await;
+    let ai = enqueue_task(&pool, TaskType::AiRewrite, 1, "{}", 0, 3).await.unwrap();
+    let order = enqueue_task(&pool, TaskType::AutoOrder, 5, "{}", 0, 3).await.unwrap();
+    let got = dequeue_next_task_of(&pool, 10, 300, &[TaskType::AutoOrder]).await.unwrap().unwrap();
+    assert_eq!(got.id, order);
+    assert!(dequeue_next_task_of(&pool, 10, 300, &[TaskType::AutoOrder, TaskType::PriceSync]).await.unwrap().is_none());
+    assert_eq!(dequeue_next_task_of(&pool, 10, 300, &[TaskType::AiRewrite]).await.unwrap().unwrap().id, ai);
+}

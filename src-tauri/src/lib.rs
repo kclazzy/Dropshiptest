@@ -1,8 +1,13 @@
 //! Dropship: ядро локальной системы дропшиппинга. GUI — Tauri v2, данные — SQLite (WAL).
 
+pub mod ai;
 pub mod db;
 pub mod error;
 pub mod pricing;
+pub mod security;
+pub mod settings;
+#[cfg(test)]
+pub mod testutil;
 
 use serde::Deserialize;
 use sqlx::SqlitePool;
