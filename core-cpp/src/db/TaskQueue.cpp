@@ -41,20 +41,34 @@ std::string typeFilter(std::span<const TaskType> types) {
 
 }  // namespace
 
-Result<std::int64_t> DatabaseManager::enqueueTask(TaskType type, int priority, std::string_view payloadJson,
-                                                  UnixSeconds scheduledAt, int maxAttempts) {
+Result<std::int64_t> DatabaseManager::enqueueTaskIn(Tx& tx, TaskType type, int priority,
+                                                    std::string_view payloadJson, UnixSeconds scheduledAt,
+                                                    int maxAttempts) {
     if (priority < kMinPriority || priority > kMaxPriority) {
         return unexpected(makeError("task priority must be in 1..10"));
     }
     if (maxAttempts < 1) return unexpected(makeError("maxAttempts must be at least 1"));
 
-    const auto inserted = execute(
+    const auto inserted = tx.execute(
         "INSERT INTO task_queue(task_type, priority, payload_json, scheduled_at, max_attempts) "
         "VALUES(?, ?, ?, ?, ?)",
         {std::string(toString(type)), std::int64_t{priority}, std::string(payloadJson), scheduledAt,
          std::int64_t{maxAttempts}});
     if (!inserted) return unexpected(inserted.error());
     return inserted->lastInsertRowId;
+}
+
+Result<std::int64_t> DatabaseManager::enqueueTask(TaskType type, int priority, std::string_view payloadJson,
+                                                  UnixSeconds scheduledAt, int maxAttempts) {
+    std::int64_t id = 0;
+    const auto done = transaction([&](Tx& tx) -> Result<void> {
+        const auto queued = enqueueTaskIn(tx, type, priority, payloadJson, scheduledAt, maxAttempts);
+        if (!queued) return unexpected(queued.error());
+        id = *queued;
+        return {};
+    });
+    if (!done) return unexpected(done.error());
+    return id;
 }
 
 Result<std::optional<Task>> DatabaseManager::claimNextTask(UnixSeconds now, std::chrono::seconds lockTimeout,

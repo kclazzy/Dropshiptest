@@ -109,6 +109,9 @@ public:
 
     Result<std::int64_t> enqueueTask(TaskType type, int priority, std::string_view payloadJson,
                                      UnixSeconds scheduledAt, int maxAttempts = 3);
+    // То же внутри уже открытой транзакции (единственное место, где описана вставка в очередь).
+    static Result<std::int64_t> enqueueTaskIn(Tx& tx, TaskType type, int priority, std::string_view payloadJson,
+                                              UnixSeconds scheduledAt, int maxAttempts = 3);
 
     // Атомарно забирает самую приоритетную готовую задачу (priority, scheduled_at, id).
     // Задачи IN_PROGRESS с истёкшей блокировкой берутся повторно; исчерпавшие попытки —

@@ -1,0 +1,26 @@
+#pragma once
+
+#include <functional>
+
+#include "bridge/RpcRouter.hpp"
+#include "bridge/SupplierSessionStore.hpp"
+#include "core/Domain.hpp"
+#include "db/DatabaseManager.hpp"
+
+namespace dropship::bridge {
+
+struct CoreServices {
+    db::DatabaseManager& db;
+    SupplierSessionStore& sessions;
+    std::function<UnixSeconds()> clock;  // подменяется в тестах
+};
+
+// Методы расширение -> ядро:
+//   PING                      -> {"pong":true,"time":<unix>}
+//   IMPORT_PRODUCT_PAYLOAD    -> {"product_id","duplicate","variants"}
+//   SYNC_SUPPLIER_COOKIES     -> {"stored":<число кук>}
+// ORDER_FULFILLMENT_RESULT появится вместе с модулем автовыкупа.
+// Объекты в `services` должны жить дольше router.
+void registerCoreHandlers(RpcRouter& router, CoreServices services);
+
+}  // namespace dropship::bridge

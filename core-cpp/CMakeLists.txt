@@ -16,6 +16,10 @@ option(DROPSHIP_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 find_package(SQLite3 REQUIRED)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(CURL REQUIRED)
+find_package(nlohmann_json 3.10 REQUIRED)
+find_package(Boost 1.78 REQUIRED)
 
 function(dropship_set_warnings target)
   if(MSVC)
@@ -37,9 +41,22 @@ add_library(dropship_core STATIC
   src/db/DatabaseManager.cpp
   src/db/Migrations.cpp
   src/db/TaskQueue.cpp
+  src/util/Sha256.cpp
+  src/net/CurlTransport.cpp
+  src/importer/UrlNormalizer.cpp
+  src/importer/ProductImport.cpp
+  src/ai/ContentSanitizer.cpp
+  src/ai/OllamaClient.cpp
+  src/bridge/JsonRpc.cpp
+  src/bridge/RpcRouter.cpp
+  src/bridge/SupplierSessionStore.cpp
+  src/bridge/TokenStore.cpp
+  src/bridge/BridgeServer.cpp
+  src/bridge/Handlers.cpp
 )
 target_include_directories(dropship_core PUBLIC src)
-target_link_libraries(dropship_core PUBLIC SQLite::SQLite3 Threads::Threads)
+target_link_libraries(dropship_core PUBLIC SQLite::SQLite3 Threads::Threads OpenSSL::Crypto
+  CURL::libcurl nlohmann_json::nlohmann_json Boost::headers)
 target_compile_features(dropship_core PUBLIC cxx_std_20)
 dropship_set_warnings(dropship_core)
 
@@ -51,6 +68,13 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_pricing.cpp
     tests/test_database.cpp
     tests/test_task_queue.cpp
+    tests/test_sanitizer.cpp
+    tests/test_ollama.cpp
+    tests/test_jsonrpc.cpp
+    tests/test_import.cpp
+    tests/test_session_and_token.cpp
+    tests/test_http_transport.cpp
+    tests/test_bridge.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)
