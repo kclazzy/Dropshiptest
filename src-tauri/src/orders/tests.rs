@@ -243,6 +243,21 @@ async fn tracking_is_pushed_to_the_store_or_left_as_manual_hint() {
     assert_eq!(sent, Some(16));
 }
 
+#[tokio::test]
+async fn carrier_revealing_tracking_is_kept_raw_and_never_sent_to_the_store() {
+    let (_d, pool, store, _v) = setup().await;
+    ingest_orders(&pool, store, &[order("T-1", 200_000, 1)], 10).await.unwrap();
+    process_next_handoff(&pool, &Notifier(Mutex::new(vec![]), 1), 11).await.unwrap();
+    record_purchase_result(&pool, 1, PurchaseResult::Ordered, None, None, 12).await.unwrap();
+    record_tracking(&pool, 1, "LP00123456789012", None, 13).await.unwrap();
+    let ok = TrackAdapter(Ok(()), Mutex::new(vec![]));
+    assert!(!push_tracking(&pool, 1, &ok, 14).await.unwrap());
+    assert!(ok.1.lock().unwrap().is_empty(), "на площадку ничего не ушло");
+    assert!(get_order(&pool, 1).await.unwrap().human_readable_hint.unwrap().contains("локального номера"));
+    let raw: Option<String> = sqlx::query_scalar("SELECT raw_tracking_number FROM orders WHERE id = 1").fetch_one(&pool).await.unwrap();
+    assert_eq!(raw.as_deref(), Some("LP00123456789012"));
+}
+
 struct Feed(Mutex<Vec<i64>>, Result<Vec<StoreOrder>, StoreErrorKind>);
 
 #[async_trait]

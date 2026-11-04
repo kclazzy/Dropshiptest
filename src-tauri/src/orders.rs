@@ -308,6 +308,12 @@ pub async fn record_tracking(pool: &SqlitePool, order_id: i64, tracking: &str, c
 pub async fn push_tracking(pool: &SqlitePool, order_id: i64, adapter: &dyn StoreAdapter, now: i64) -> AppResult<bool> {
     let order = get_order(pool, order_id).await?;
     let (OrderStatus::Shipped, Some(track)) = (order.status, order.tracking_number.as_deref()) else { return Ok(false) };
+    sqlx::query("UPDATE orders SET raw_tracking_number = COALESCE(raw_tracking_number, ?) WHERE id = ?").bind(track).bind(order_id).execute(pool).await?;
+    if let Some(service) = crate::tracking::blocked_service(track) {
+        let hint = format!("Трек-номер службы «{service}» площадка может отклонить — в магазин не отправлен. Дождитесь локального номера и введите его.");
+        sqlx::query("UPDATE orders SET human_readable_hint = ?, updated_at = ? WHERE id = ?").bind(hint).bind(now).bind(order_id).execute(pool).await?;
+        return Ok(false);
+    }
     match adapter.submit_tracking(&order.external_order_id, track).await {
         Ok(()) => {
             sqlx::query("UPDATE orders SET tracking_sent_at = ?, human_readable_hint = 'Трек-номер передан в магазин.', error_message = NULL, updated_at = ? WHERE id = ?").bind(now).bind(now).bind(order_id).execute(pool).await?;

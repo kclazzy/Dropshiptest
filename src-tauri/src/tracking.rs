@@ -28,12 +28,18 @@ pub struct Checked {
     pub foreign_origin: bool,
 }
 
+/// Служба из чёрного списка по префиксу номера (регистр не важен), если есть.
+pub fn blocked_service(track: &str) -> Option<&'static str> {
+    let upper = track.trim().to_ascii_uppercase();
+    BLOCKED_PREFIXES.iter().find(|(prefix, _)| upper.starts_with(prefix)).map(|(_, service)| *service)
+}
+
 pub fn check(raw: &str) -> AppResult<Checked> {
     let track: String = raw.chars().filter(|c| !c.is_whitespace() && *c != '-').collect::<String>().to_ascii_uppercase();
     if track.len() < 8 || track.len() > 40 || !track.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(AppError::Validation("трек-номер должен состоять из 8–40 латинских букв и цифр".into()));
     }
-    if let Some((_, service)) = BLOCKED_PREFIXES.iter().find(|(prefix, _)| track.starts_with(prefix)) {
+    if let Some(service) = blocked_service(&track) {
         return Err(AppError::Validation(format!("трек-номер службы «{service}» площадка может отклонить. Дождитесь локального номера (Почта России, СДЭК и др.) и введите его")));
     }
     let foreign_origin = is_s10(&track) && !track.ends_with("RU");
