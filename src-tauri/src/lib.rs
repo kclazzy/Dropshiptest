@@ -1,8 +1,10 @@
 //! Dropship: ядро локальной системы дропшиппинга. GUI — Tauri v2, данные — SQLite (WAL).
 
 pub mod ai;
+pub mod catalog;
 pub mod db;
 pub mod error;
+pub mod import;
 pub mod pricing;
 pub mod security;
 pub mod settings;

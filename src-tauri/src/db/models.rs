@@ -15,7 +15,7 @@ macro_rules! text_enum {
     };
 }
 
-text_enum!(PlatformType, "lowercase", { Ozon, Avito, Shopify, Woocommerce, Ebay });
+text_enum!(PlatformType, "lowercase", { Ozon, Avito, Shopify, Woocommerce, Ebay, Local });
 text_enum!(AiStatus, "SCREAMING_SNAKE_CASE", { Pending, Processing, Ready, Error });
 text_enum!(MonitorStatus, "SCREAMING_SNAKE_CASE", { Active, Paused, CaptchaBlocked, Error });
 text_enum!(TaskStatus, "SCREAMING_SNAKE_CASE", { Pending, InProgress, Completed, Failed });
@@ -147,6 +147,8 @@ pub struct ProductVariant {
     pub is_in_stock: bool,
     pub state_hash: String,
     pub updated_at: i64,
+    pub published_hash: Option<String>,
+    pub rejected_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
