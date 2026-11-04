@@ -21,7 +21,7 @@ text_enum!(MonitorStatus, "SCREAMING_SNAKE_CASE", { Active, Paused, CaptchaBlock
 text_enum!(TaskStatus, "SCREAMING_SNAKE_CASE", { Pending, InProgress, Completed, Failed });
 text_enum!(TaskType, "SCREAMING_SNAKE_CASE", { AiRewrite, OzonPublish, AvitoFeedSync, PriceSync, AutoOrder });
 text_enum!(OrderStatus, "SCREAMING_SNAKE_CASE", {
-    New, ReadyToBuy, QueuedForExt, Ordered, Shipped, ManualReview, Error
+    New, ReadyToBuy, QueuedForExt, Ordered, Shipped, ManualReview, Error, Cancelled
 });
 
 /// Схема доставки заказа ('rFBS', 'FBS', 'AVITO_DELIVERY', 'DIRECT').

@@ -221,7 +221,7 @@ fn fees(price: Minor, rule: &PricingRule) -> Result<(Minor, Minor), PricingError
 }
 
 /// Чистая прибыль при цене `price`: цена − комиссия − эквайринг/налог − себестоимость.
-fn profit_at(price: Minor, total_cost: Minor, rule: &PricingRule) -> Result<Minor, PricingError> {
+pub fn profit_at(price: Minor, total_cost: Minor, rule: &PricingRule) -> Result<Minor, PricingError> {
     let (marketplace, acquiring) = fees(price, rule)?;
     to_i64(price as i128 - marketplace as i128 - acquiring as i128 - total_cost as i128)
 }

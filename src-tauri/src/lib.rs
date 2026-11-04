@@ -7,6 +7,7 @@ pub mod db;
 pub mod error;
 pub mod import;
 pub mod monitor;
+pub mod orders;
 pub mod pricing;
 pub mod security;
 pub mod services;

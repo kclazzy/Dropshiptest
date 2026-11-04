@@ -148,6 +148,24 @@ async fn repeated_failed_logins_close_the_connection() {
 }
 
 #[tokio::test]
+async fn pushes_reach_only_authenticated_sessions_and_replies_are_ignored() {
+    let h = start().await;
+    let token = pairing::issue_token(&h.state.pool, 1).await.unwrap();
+    let mut anon = connect(&h, None).await.unwrap();
+    let mut authed = connect(&h, None).await.unwrap();
+    call(&mut authed, 1, "AUTH", json!({"token": token})).await;
+    assert_eq!(h.state.push("EXECUTE_AUTO_ORDER", json!({"order_id": 5})), 2, "оба подписаны на канал");
+    let msg = tokio::time::timeout(Duration::from_secs(5), authed.next()).await.unwrap().unwrap().unwrap();
+    let v: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+    assert_eq!((v["method"].as_str(), v["params"]["order_id"].as_i64()), (Some("EXECUTE_AUTO_ORDER"), Some(5)));
+    // ответ расширения на push не порождает ошибку «не запрос»
+    authed.send(WsMessage::Text(json!({"jsonrpc": "2.0", "id": v["id"], "result": {"opened": true}}).to_string().into())).await.unwrap();
+    assert_eq!(call(&mut authed, 2, "PING", json!({})).await["result"]["pong"], true);
+    // неавторизованная сессия ничего не получила
+    assert_eq!(call(&mut anon, 1, "PING", json!({})).await["result"]["pong"], true);
+}
+
+#[tokio::test]
 async fn bridge_refuses_non_loopback_addresses() {
     assert!(bind_loopback("0.0.0.0:0").await.is_err());
     assert!(bind_loopback("192.168.1.5:8765").await.is_err());

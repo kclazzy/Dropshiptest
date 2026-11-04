@@ -39,11 +39,28 @@ pub struct BridgeState {
     pub pool: SqlitePool,
     pub pairing: pairing::Pairing,
     pub extra: Option<Arc<dyn ExtraMethods>>,
+    /// Сообщения ядро → расширение (готовый JSON-RPC запрос); получают только авторизованные сессии.
+    outbound: tokio::sync::broadcast::Sender<String>,
+    next_push_id: std::sync::atomic::AtomicI64,
 }
 
 impl BridgeState {
     pub fn new(pool: SqlitePool, extra: Option<Arc<dyn ExtraMethods>>) -> Arc<Self> {
-        Arc::new(Self { pool, pairing: pairing::Pairing::default(), extra })
+        let (outbound, _) = tokio::sync::broadcast::channel(64);
+        Arc::new(Self { pool, pairing: pairing::Pairing::default(), extra, outbound, next_push_id: std::sync::atomic::AtomicI64::new(1) })
+    }
+
+    /// Отправляет запрос всем подключённым расширениям; возвращает число получателей (0 — никого нет).
+    pub fn push(&self, method: &str, params: Value) -> usize {
+        let id = self.next_push_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let text = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
+        self.outbound.send(text).unwrap_or(0)
+    }
+}
+
+impl crate::orders::OrderNotifier for BridgeState {
+    fn notify(&self, method: &str, params: Value) -> usize {
+        self.push(method, params)
     }
 }
 
@@ -84,13 +101,33 @@ async fn send(socket: &mut WebSocket, text: String) -> bool {
     socket.send(Message::Text(text.into())).await.is_ok()
 }
 
+/// Ответы расширения на наши запросы (`result`/`error` без `method`) в этой версии не нужны.
+fn is_response(text: &str) -> bool {
+    serde_json::from_str::<Value>(text).is_ok_and(|v| v.get("method").is_none() && (v.get("result").is_some() || v.get("error").is_some()))
+}
+
 async fn session(mut socket: WebSocket, state: Arc<BridgeState>) {
+    let mut pushes = state.outbound.subscribe();
     let mut authed = false;
     let mut failures = 0u32;
     let deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
     loop {
         let wait = if authed { IDLE_TIMEOUT } else { deadline.saturating_duration_since(tokio::time::Instant::now()) };
-        let Some(text) = next_text(&mut socket, wait).await else { break };
+        let text = tokio::select! {
+            incoming = next_text(&mut socket, wait) => match incoming {
+                Some(t) => t,
+                None => break,
+            },
+            Ok(push) = pushes.recv(), if authed => {
+                if !send(&mut socket, push).await {
+                    break;
+                }
+                continue;
+            }
+        };
+        if is_response(&text) {
+            continue;
+        }
         let request = match rpc::parse_request(&text) {
             Ok(r) => r,
             Err((id, e)) => {

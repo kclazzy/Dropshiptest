@@ -15,7 +15,7 @@ use crate::error::AppResult;
 use crate::monitor::fetch::{DomainThrottle, FetchError, HttpFetcher, Page, PageFetcher};
 use crate::monitor::{self, SyncOutcome};
 use crate::security::CredentialVault;
-use crate::{stores, sync};
+use crate::{orders, stores, sync};
 
 const TICK: Duration = Duration::from_secs(30);
 const MAX_TASKS_PER_TICK: usize = 50;
@@ -31,6 +31,14 @@ pub struct AppRpc {
     pub vault: Arc<CredentialVault>,
 }
 
+fn order_id(params: &Value) -> Result<i64, RpcError> {
+    params.get("order_id").and_then(Value::as_i64).filter(|id| *id > 0).ok_or_else(|| RpcError::new(INVALID_PARAMS, "нужен параметр order_id"))
+}
+
+fn opt_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
+    params.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+}
+
 #[async_trait]
 impl ExtraMethods for AppRpc {
     async fn handle(&self, method: &str, params: &Value, now: i64) -> Result<Value, RpcError> {
@@ -41,6 +49,25 @@ impl ExtraMethods for AppRpc {
                 let (Some(host), Some(cookies)) = (host, cookies) else { return Err(RpcError::new(INVALID_PARAMS, "нужны параметры host и cookies")) };
                 monitor::save_supplier_cookies(&self.pool, &self.vault, host, cookies, now).await?;
                 Ok(json!({"ok": true}))
+            }
+            "LIST_ORDERS" => {
+                let orders = orders::list_order_views(&self.pool, 200).await?;
+                Ok(json!({ "orders": orders }))
+            }
+            "ORDER_FULFILLMENT_RESULT" => {
+                let result = match params.get("status").and_then(Value::as_str) {
+                    Some("ordered") => orders::PurchaseResult::Ordered,
+                    Some("failed") => orders::PurchaseResult::Failed,
+                    Some("needs_manual") => orders::PurchaseResult::NeedsManual,
+                    _ => return Err(RpcError::new(INVALID_PARAMS, "status: ordered, failed или needs_manual")),
+                };
+                let status = orders::record_purchase_result(&self.pool, order_id(params)?, result, opt_str(params, "supplier_order_id"), opt_str(params, "message"), now).await?;
+                Ok(json!({ "status": status }))
+            }
+            "ORDER_TRACKING_UPDATE" => {
+                let Some(track) = opt_str(params, "tracking_number") else { return Err(RpcError::new(INVALID_PARAMS, "нужен параметр tracking_number")) };
+                let status = orders::record_tracking(&self.pool, order_id(params)?, track, opt_str(params, "carrier"), now).await?;
+                Ok(json!({ "status": status }))
             }
             other => Err(RpcError::new(METHOD_NOT_FOUND, format!("метод {other} не поддерживается"))),
         }
@@ -103,11 +130,34 @@ pub async fn monitor_tick(pool: &SqlitePool, vault: &CredentialVault, fetcher: &
     Ok(report)
 }
 
-async fn monitor_loop(pool: SqlitePool, vault: Arc<CredentialVault>, cancel: CancellationToken) {
+/// Заказы: передать готовые расширению и отправить полученные трек-номера в магазины.
+pub async fn orders_tick(pool: &SqlitePool, vault: &CredentialVault, notifier: &dyn orders::OrderNotifier, now: i64) -> AppResult<usize> {
+    let mut handed = 0;
+    for _ in 0..MAX_TASKS_PER_TICK {
+        match orders::process_next_handoff(pool, notifier, now).await? {
+            orders::HandoffOutcome::NoTask => break,
+            orders::HandoffOutcome::HandedOff { .. } => handed += 1,
+            orders::HandoffOutcome::Stale { .. } => {}
+        }
+    }
+    let waiting: Vec<(i64, i64)> = sqlx::query_as("SELECT id, store_id FROM orders WHERE status = 'SHIPPED' AND tracking_sent_at IS NULL AND tracking_number IS NOT NULL LIMIT 100").fetch_all(pool).await?;
+    for (order_id, store_id) in waiting {
+        let store: Option<Store> = sqlx::query_as("SELECT * FROM stores WHERE id = ? AND is_active = 1 AND platform_type <> 'local'").bind(store_id).fetch_optional(pool).await?;
+        if let Some(Ok(adapter)) = store.map(|s| stores::build_adapter(&s, vault)) {
+            orders::push_tracking(pool, order_id, adapter.as_ref(), now).await?;
+        }
+    }
+    Ok(handed)
+}
+
+async fn monitor_loop(pool: SqlitePool, vault: Arc<CredentialVault>, bridge: Arc<BridgeState>, cancel: CancellationToken) {
     let fetcher = ThrottledFetcher { inner: HttpFetcher { allow_private: false }, throttle: DomainThrottle::new(SUPPLIER_GAP_MS) };
     while !cancel.is_cancelled() {
         if let Err(e) = monitor_tick(&pool, &vault, &fetcher, now_secs()).await {
             tracing::error!(error = %e, "ошибка цикла мониторинга");
+        }
+        if let Err(e) = orders_tick(&pool, &vault, bridge.as_ref(), now_secs()).await {
+            tracing::error!(error = %e, "ошибка цикла заказов");
         }
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -141,7 +191,7 @@ pub async fn start(pool: SqlitePool, vault: Arc<CredentialVault>, cancel: Cancel
         Err(e) => tracing::warn!(error = %e, "ИИ не настроен: генерация карточек отключена"),
     }
 
-    tokio::spawn(monitor_loop(pool, vault, cancel));
+    tokio::spawn(monitor_loop(pool, vault, state.clone(), cancel));
     state
 }
 
@@ -201,6 +251,42 @@ mod tests {
         assert!(crate::settings::get(&pool, "supplier_cookies:s.example").await.unwrap().is_some());
         assert_eq!(rpc.handle("SYNC_SUPPLIER_COOKIES", &json!({"host": "s.example"}), 5).await.unwrap_err().code, INVALID_PARAMS);
         assert_eq!(rpc.handle("X", &json!({}), 5).await.unwrap_err().code, METHOD_NOT_FOUND);
+    }
+
+    struct Count(Mutex<usize>);
+    impl orders::OrderNotifier for Count {
+        fn notify(&self, _m: &str, _p: Value) -> usize {
+            *self.0.lock().unwrap() += 1;
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn order_rpc_methods_drive_the_whole_flow_and_validate_input() {
+        let (_d, pool) = pool().await;
+        let (store, _p, _v) = crate::testutil::insert_product(&pool, "ozon", "r1").await;
+        sqlx::query("UPDATE product_variants SET external_variant_id = 'OFFER-1'").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO pricing_rules(store_id, price_from_minor, price_to_minor, margin_percent, min_profit_minor, min_stock_threshold) VALUES (?, 0, 9000000000, 50.0, 1000, 1)").bind(store).execute(&pool).await.unwrap();
+        let order = stores::StoreOrder { external_order_id: "E-1".into(), external_variant_id: "OFFER-1".into(), quantity: 1, total_minor: 200_000, buyer_address_json: "{}".into() };
+        orders::ingest_orders(&pool, store, &[order], 1).await.unwrap();
+        let vault = CredentialVault::from_key([3; 32]);
+        let notifier = Count(Mutex::new(0));
+        assert_eq!(orders_tick(&pool, &vault, &notifier, 2).await.unwrap(), 1);
+        assert_eq!(orders_tick(&pool, &vault, &notifier, 3).await.unwrap(), 0);
+
+        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([3; 32])) };
+        let listed = rpc.handle("LIST_ORDERS", &json!({}), 4).await.unwrap();
+        assert_eq!(listed["orders"][0]["status"], "QUEUED_FOR_EXT");
+        assert_eq!((listed["orders"][0]["retail_total_cents"].as_i64(), listed["orders"][0]["sku"].as_str()), (Some(200_000), Some("SKU-1")));
+        assert!(listed["orders"][0]["address"].is_object() && listed["orders"][0].get("buyer_address_json").is_none());
+        assert_eq!(rpc.handle("ORDER_FULFILLMENT_RESULT", &json!({"order_id": 1, "status": "bogus"}), 5).await.unwrap_err().code, INVALID_PARAMS);
+        assert_eq!(rpc.handle("ORDER_FULFILLMENT_RESULT", &json!({"status": "ordered"}), 5).await.unwrap_err().code, INVALID_PARAMS);
+        let ok = rpc.handle("ORDER_FULFILLMENT_RESULT", &json!({"order_id": 1, "status": "ordered", "supplier_order_id": "S-1", "message": ""}), 5).await.unwrap();
+        assert_eq!(ok["status"], "ORDERED");
+        assert_eq!(rpc.handle("ORDER_TRACKING_UPDATE", &json!({"order_id": 1}), 6).await.unwrap_err().code, INVALID_PARAMS);
+        assert_eq!(rpc.handle("ORDER_TRACKING_UPDATE", &json!({"order_id": 1, "tracking_number": "RB1", "carrier": ""}), 6).await.unwrap()["status"], "SHIPPED");
+        let err = rpc.handle("ORDER_FULFILLMENT_RESULT", &json!({"order_id": 99, "status": "ordered"}), 7).await.unwrap_err();
+        assert_eq!(err.code, INVALID_PARAMS, "несуществующий заказ — ошибка пользователя, не сбой");
     }
 
     #[tokio::test]
