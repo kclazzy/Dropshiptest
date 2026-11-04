@@ -29,6 +29,8 @@ pub fn now_secs() -> i64 {
 pub struct AppRpc {
     pub pool: SqlitePool,
     pub vault: Arc<CredentialVault>,
+    /// Адрес API релизов (в тестах — локальный сервер).
+    pub update_api: String,
 }
 
 fn order_id(params: &Value) -> Result<i64, RpcError> {
@@ -49,6 +51,15 @@ impl ExtraMethods for AppRpc {
                 let (Some(host), Some(cookies)) = (host, cookies) else { return Err(RpcError::new(INVALID_PARAMS, "нужны параметры host и cookies")) };
                 monitor::save_supplier_cookies(&self.pool, &self.vault, host, cookies, now).await?;
                 Ok(json!({"ok": true}))
+            }
+            "UPDATE_CHECK" => {
+                let info = crate::update::check(&self.update_api, env!("CARGO_PKG_VERSION")).await?;
+                // Тихая замена приложения не делается: can_apply всегда false, расширение подскажет открыть «Настройки → Обновление».
+                let mut value = serde_json::to_value(&info).unwrap_or_default();
+                if let Some(map) = value.as_object_mut() {
+                    map.insert("can_apply".into(), json!(false));
+                }
+                Ok(value)
             }
             "LIST_ORDERS" => {
                 let orders = orders::list_order_views(&self.pool, 200).await?;
@@ -168,7 +179,7 @@ async fn monitor_loop(pool: SqlitePool, vault: Arc<CredentialVault>, bridge: Arc
 
 /// Запускает все службы. Возвращает состояние моста (для окна привязки расширения).
 pub async fn start(pool: SqlitePool, vault: Arc<CredentialVault>, cancel: CancellationToken) -> Arc<BridgeState> {
-    let extra: Arc<dyn ExtraMethods> = Arc::new(AppRpc { pool: pool.clone(), vault: vault.clone() });
+    let extra: Arc<dyn ExtraMethods> = Arc::new(AppRpc { pool: pool.clone(), vault: vault.clone(), update_api: crate::update::GITHUB_API.to_string() });
     let state = BridgeState::new(pool.clone(), Some(extra));
 
     match bridge::bind_loopback(bridge::DEFAULT_ADDR).await {
@@ -254,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn bridge_rpc_stores_supplier_cookies_and_rejects_bad_input() {
         let (_d, pool) = pool().await;
-        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([2; 32])) };
+        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([2; 32])), update_api: String::new() };
         assert_eq!(rpc.handle("SYNC_SUPPLIER_COOKIES", &json!({"host": "s.example", "cookies": "a=b"}), 5).await.unwrap(), json!({"ok": true}));
         assert!(crate::settings::get(&pool, "supplier_cookies:s.example").await.unwrap().is_some());
         assert_eq!(rpc.handle("SYNC_SUPPLIER_COOKIES", &json!({"host": "s.example"}), 5).await.unwrap_err().code, INVALID_PARAMS);
@@ -282,7 +293,7 @@ mod tests {
         assert_eq!(orders_tick(&pool, &vault, &notifier, 2).await.unwrap(), 1);
         assert_eq!(orders_tick(&pool, &vault, &notifier, 3).await.unwrap(), 0);
 
-        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([3; 32])) };
+        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([3; 32])), update_api: String::new() };
         let listed = rpc.handle("LIST_ORDERS", &json!({}), 4).await.unwrap();
         assert_eq!(listed["orders"][0]["status"], "QUEUED_FOR_EXT");
         assert_eq!((listed["orders"][0]["retail_total_cents"].as_i64(), listed["orders"][0]["sku"].as_str()), (Some(200_000), Some("SKU-1")));
@@ -295,6 +306,17 @@ mod tests {
         assert_eq!(rpc.handle("ORDER_TRACKING_UPDATE", &json!({"order_id": 1, "tracking_number": "RB1", "carrier": ""}), 6).await.unwrap()["status"], "SHIPPED");
         let err = rpc.handle("ORDER_FULFILLMENT_RESULT", &json!({"order_id": 99, "status": "ordered"}), 7).await.unwrap_err();
         assert_eq!(err.code, INVALID_PARAMS, "несуществующий заказ — ошибка пользователя, не сбой");
+    }
+
+    #[tokio::test]
+    async fn update_check_rpc_reports_release_and_never_offers_silent_apply() {
+        let (_d, pool) = pool().await;
+        let server = crate::testutil::MockServer::start().await;
+        server.reply(&format!("/repos/{}/releases/latest", crate::update::REPO), 200, r#"{"tag_name":"v99.0.0","html_url":"https://github.com/kclazzy/Dropshiptest/releases/tag/v99.0.0"}"#);
+        let rpc = AppRpc { pool, vault: Arc::new(CredentialVault::from_key([4; 32])), update_api: server.base_url.clone() };
+        let reply = rpc.handle("UPDATE_CHECK", &json!({}), 1).await.unwrap();
+        assert_eq!((reply["update_available"].as_bool(), reply["can_apply"].as_bool()), (Some(true), Some(false)));
+        assert_eq!(rpc.handle("UPDATE_APPLY", &json!({}), 1).await.unwrap_err().code, METHOD_NOT_FOUND);
     }
 
     #[tokio::test]

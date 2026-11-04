@@ -72,7 +72,7 @@ async function checkUpdate(): Promise<void> {
   $('update-text').textContent = `Доступна версия ${info.latest} (у вас ${info.current}).`;
   const apply = $<HTMLButtonElement>('update-apply');
   apply.hidden = !info.can_apply;
-  if (!info.can_apply) $('update-text').textContent += ' Запустите ядро через run.sh / run.cmd, чтобы обновляться кнопкой.';
+  if (!info.can_apply) $('update-text').textContent += ' Обновите приложение: Настройки → Обновление.';
 }
 
 async function applyUpdate(): Promise<void> {

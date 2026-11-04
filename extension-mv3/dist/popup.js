@@ -63,7 +63,7 @@ async function checkUpdate() {
   $("update-text").textContent = `\u0414\u043E\u0441\u0442\u0443\u043F\u043D\u0430 \u0432\u0435\u0440\u0441\u0438\u044F ${info.latest} (\u0443 \u0432\u0430\u0441 ${info.current}).`;
   const apply = $("update-apply");
   apply.hidden = !info.can_apply;
-  if (!info.can_apply) $("update-text").textContent += " \u0417\u0430\u043F\u0443\u0441\u0442\u0438\u0442\u0435 \u044F\u0434\u0440\u043E \u0447\u0435\u0440\u0435\u0437 run.sh / run.cmd, \u0447\u0442\u043E\u0431\u044B \u043E\u0431\u043D\u043E\u0432\u043B\u044F\u0442\u044C\u0441\u044F \u043A\u043D\u043E\u043F\u043A\u043E\u0439.";
+  if (!info.can_apply) $("update-text").textContent += " \u041E\u0431\u043D\u043E\u0432\u0438\u0442\u0435 \u043F\u0440\u0438\u043B\u043E\u0436\u0435\u043D\u0438\u0435: \u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u2192 \u041E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0435.";
 }
 async function applyUpdate() {
   await send({ type: "update-apply" });
