@@ -258,16 +258,8 @@ mod tests {
 
     async fn pool() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
-        (dir.path().to_owned().into(), crate::db::init_pool(&dir.path().join("i.db")).await.unwrap()).into_pair(dir)
-    }
-
-    trait IntoPair {
-        fn into_pair(self, dir: tempfile::TempDir) -> (tempfile::TempDir, SqlitePool);
-    }
-    impl IntoPair for (std::path::PathBuf, SqlitePool) {
-        fn into_pair(self, dir: tempfile::TempDir) -> (tempfile::TempDir, SqlitePool) {
-            (dir, self.1)
-        }
+        let pool = crate::db::init_pool(&dir.path().join("i.db")).await.unwrap();
+        (dir, pool)
     }
 
     #[test]
@@ -291,7 +283,8 @@ mod tests {
 
     #[test]
     fn bad_payloads_are_rejected_at_the_boundary() {
-        let cases: Vec<Box<dyn Fn(&mut Value)>> = vec![
+        type Mutation = Box<dyn Fn(&mut Value)>;
+        let cases: Vec<Mutation> = vec![
             Box::new(|v| { v["title"] = json!(""); }),
             Box::new(|v| { v["title"] = json!(5); }),
             Box::new(|v| { v["title"] = json!("x".repeat(501)); }),

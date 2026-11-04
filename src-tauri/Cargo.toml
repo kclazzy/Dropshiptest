@@ -44,4 +44,5 @@ url = "2.5.8"
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 [dev-dependencies]
+futures-util = "0.3.34"
 tempfile = "3.27.0"

@@ -95,6 +95,27 @@ pub fn hex_decode(text: &str) -> Option<Vec<u8>> {
     (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok()).collect()
 }
 
+/// 32 случайных байта в hex (64 символа): токены моста и одноразовые коды.
+pub fn random_token() -> String {
+    hex_encode(Aes256Gcm::generate_key(OsRng).as_slice())
+}
+
+/// SHA-256 в hex: в базе хранится только отпечаток токена, не сам токен.
+pub fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex_encode(&Sha256::digest(text.as_bytes()))
+}
+
+/// Сравнение без раннего выхода по первому несовпавшему байту.
+pub fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,3 +167,4 @@ mod tests {
         assert_eq!(hex_decode("é1"), None);
     }
 }
+
