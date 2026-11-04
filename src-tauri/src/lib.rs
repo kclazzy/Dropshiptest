@@ -113,6 +113,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![
             price_breakdown,
             commands::list_products,
+            commands::add_backup_supplier,
+            commands::remove_backup_supplier,
             commands::product_detail,
             commands::update_product_text,
             commands::retry_ai,

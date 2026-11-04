@@ -180,6 +180,30 @@ pub async fn order_set_tracking(state: S<'_>, order_id: i64, tracking_number: St
     Ok(json!({ "status": status }))
 }
 
+// ---- резервные поставщики ----
+
+#[derive(serde::Deserialize)]
+pub struct BackupInput {
+    pub variant_id: i64,
+    pub priority: i64,
+    pub url: String,
+    pub sku: String,
+    pub price_minor: i64,
+    pub shipping_minor: i64,
+    pub stock: i64,
+}
+
+#[tauri::command]
+pub async fn add_backup_supplier(state: S<'_>, input: BackupInput) -> AppResult<()> {
+    let supplier = crate::failover::NewSupplier { priority: input.priority, url: &input.url, sku: &input.sku, price_minor: input.price_minor, shipping_minor: input.shipping_minor, stock: input.stock };
+    crate::failover::upsert_backup(&state.pool, input.variant_id, &supplier, now_secs()).await
+}
+
+#[tauri::command]
+pub async fn remove_backup_supplier(state: S<'_>, variant_id: i64, priority: i64) -> AppResult<()> {
+    crate::failover::remove_backup(&state.pool, variant_id, priority, now_secs()).await
+}
+
 // ---- расширение ----
 
 #[tauri::command]

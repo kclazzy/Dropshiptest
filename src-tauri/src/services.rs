@@ -15,7 +15,7 @@ use crate::error::AppResult;
 use crate::monitor::fetch::{DomainThrottle, FetchError, HttpFetcher, Page, PageFetcher};
 use crate::monitor::{self, SyncOutcome};
 use crate::security::CredentialVault;
-use crate::{orders, stores, sync};
+use crate::{failover, orders, stores, sync};
 
 const TICK: Duration = Duration::from_secs(30);
 const MAX_TASKS_PER_TICK: usize = 50;
@@ -79,6 +79,22 @@ impl ExtraMethods for AppRpc {
                 let Some(track) = opt_str(params, "tracking_number") else { return Err(RpcError::new(INVALID_PARAMS, "нужен параметр tracking_number")) };
                 let status = orders::record_tracking(&self.pool, order_id(params)?, track, opt_str(params, "carrier"), now).await?;
                 Ok(json!({ "status": status }))
+            }
+            "ADD_BACKUP_SUPPLIER" => {
+                let int = |k: &str| params.get(k).and_then(Value::as_i64);
+                let (Some(variant_id), Some(url), Some(price)) = (int("variant_id"), opt_str(params, "url"), int("price_cents")) else {
+                    return Err(RpcError::new(INVALID_PARAMS, "нужны variant_id, url и price_cents"));
+                };
+                let supplier = failover::NewSupplier {
+                    priority: int("priority").unwrap_or(2),
+                    url,
+                    sku: opt_str(params, "sku").unwrap_or("backup"),
+                    price_minor: price,
+                    shipping_minor: int("shipping_cents").unwrap_or(0),
+                    stock: int("stock").unwrap_or(0),
+                };
+                failover::upsert_backup(&self.pool, variant_id, &supplier, now).await?;
+                Ok(json!({"ok": true}))
             }
             other => Err(RpcError::new(METHOD_NOT_FOUND, format!("метод {other} не поддерживается"))),
         }
@@ -168,6 +184,18 @@ pub async fn orders_tick(pool: &SqlitePool, vault: &CredentialVault, notifier: &
     Ok(handed)
 }
 
+const PRUNE_INTERVAL_SECS: i64 = 86_400;
+
+/// Раз в сутки: чистка «мёртвых» карточек. Возвращает отчёт, если чистка прошла в этом вызове.
+pub async fn maintenance_tick(pool: &SqlitePool, now: i64) -> AppResult<Option<crate::pruner::PruneReport>> {
+    let last = crate::settings::get(pool, "last_prune_at").await?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    if now - last < PRUNE_INTERVAL_SECS {
+        return Ok(None);
+    }
+    crate::settings::set(pool, "last_prune_at", &now.to_string(), now).await?;
+    Ok(Some(crate::pruner::run(pool, &crate::pruner::PruneRule::default(), now).await?))
+}
+
 async fn monitor_loop(pool: SqlitePool, vault: Arc<CredentialVault>, bridge: Arc<BridgeState>, cancel: CancellationToken) {
     let fetcher = ThrottledFetcher { inner: HttpFetcher { allow_private: false }, throttle: DomainThrottle::new(SUPPLIER_GAP_MS) };
     while !cancel.is_cancelled() {
@@ -176,6 +204,9 @@ async fn monitor_loop(pool: SqlitePool, vault: Arc<CredentialVault>, bridge: Arc
         }
         if let Err(e) = orders_tick(&pool, &vault, bridge.as_ref(), now_secs()).await {
             tracing::error!(error = %e, "ошибка цикла заказов");
+        }
+        if let Err(e) = maintenance_tick(&pool, now_secs()).await {
+            tracing::error!(error = %e, "ошибка суточной чистки");
         }
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -267,6 +298,31 @@ mod tests {
         assert_eq!(report.stores_synced, 0);
         let err: Option<String> = sqlx::query_scalar("SELECT last_error FROM stores WHERE platform_type = 'ozon'").fetch_one(&pool).await.unwrap();
         assert!(err.unwrap().contains("ключ"));
+    }
+
+    #[tokio::test]
+    async fn backup_supplier_rpc_adds_validates_and_feeds_failover() {
+        let (_d, pool) = pool().await;
+        let (_s, _p, variant) = crate::testutil::insert_product(&pool, "local", "bk").await;
+        let rpc = AppRpc { pool: pool.clone(), vault: Arc::new(CredentialVault::from_key([2; 32])), update_api: String::new() };
+        let ok = json!({"variant_id": variant, "url": "https://alt.example/item/1", "price_cents": 90_000, "stock": 5});
+        assert_eq!(rpc.handle("ADD_BACKUP_SUPPLIER", &ok, 5).await.unwrap(), json!({"ok": true}));
+        assert!(failover::has_suppliers(&mut pool.acquire().await.unwrap(), variant).await.unwrap());
+        assert_eq!(rpc.handle("ADD_BACKUP_SUPPLIER", &json!({"variant_id": variant}), 5).await.unwrap_err().code, INVALID_PARAMS);
+        let bad_url = json!({"variant_id": variant, "url": "ftp://x", "price_cents": 1});
+        assert!(rpc.handle("ADD_BACKUP_SUPPLIER", &bad_url, 5).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn maintenance_prunes_once_a_day() {
+        let (_d, pool) = pool().await;
+        let (_s, product, _v) = crate::testutil::insert_product(&pool, "local", "mt").await;
+        let day = 86_400;
+        sqlx::query("UPDATE products SET published_at = 1 WHERE id = ?").bind(product).execute(&pool).await.unwrap();
+        let first = maintenance_tick(&pool, 40 * day).await.unwrap().expect("первая чистка");
+        assert_eq!(first.reanimated, 1);
+        assert!(maintenance_tick(&pool, 40 * day + 3_600).await.unwrap().is_none(), "в течение суток повторно не запускается");
+        assert!(maintenance_tick(&pool, 41 * day + 10).await.unwrap().is_some());
     }
 
     #[tokio::test]

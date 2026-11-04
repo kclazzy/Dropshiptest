@@ -83,17 +83,78 @@ fn collect_offers(node: &Value, inherited_sku: Option<&str>, out: &mut Vec<Offer
     }
 }
 
+/// Каскад (от надёжного к грубому): 1) JSON-состояние страницы (`__NEXT_DATA__`, `application/json`),
+/// 2) schema.org JSON-LD, 3) разметка `meta`/`itemprop`. Следующий шаг работает, только если предыдущий ничего не нашёл.
 pub fn parse_offers(html: &str) -> Vec<Offer> {
     let document = Html::parse_document(html);
-    let Ok(selector) = Selector::parse(r#"script[type="application/ld+json"]"#) else { return Vec::new() };
-    let mut offers = Vec::new();
-    for script in document.select(&selector) {
-        let raw: String = script.text().collect();
-        if let Ok(value) = serde_json::from_str::<Value>(raw.trim()) {
-            collect_offers(&value, None, &mut offers);
+    for step in [from_json_state, from_json_ld, from_meta] {
+        let offers = step(&document);
+        if !offers.is_empty() {
+            return offers;
         }
     }
+    Vec::new()
+}
+
+fn scripts(document: &Html, css: &str) -> Vec<Value> {
+    let Ok(selector) = Selector::parse(css) else { return Vec::new() };
+    document.select(&selector).filter_map(|s| serde_json::from_str::<Value>(s.text().collect::<String>().trim()).ok()).collect()
+}
+
+fn from_json_ld(document: &Html) -> Vec<Offer> {
+    let mut offers = Vec::new();
+    for value in scripts(document, r#"script[type="application/ld+json"]"#) {
+        collect_offers(&value, None, &mut offers);
+    }
     offers
+}
+
+/// Ищет в произвольном JSON ключи `offers` с ценой (так отдают данные Next.js и подобные сайты).
+fn collect_state_offers(node: &Value, out: &mut Vec<Offer>, depth: usize) {
+    if depth > 24 {
+        return;
+    }
+    match node {
+        Value::Array(items) => items.iter().for_each(|n| collect_state_offers(n, out, depth + 1)),
+        Value::Object(map) => {
+            if let Some(offers) = map.get("offers") {
+                let list: Vec<&Value> = match offers {
+                    Value::Array(items) => items.iter().collect(),
+                    other => vec![other],
+                };
+                out.extend(list.into_iter().filter(|n| n.is_object()).filter_map(offer_from));
+            }
+            map.iter().filter(|(k, _)| k.as_str() != "offers").for_each(|(_, v)| collect_state_offers(v, out, depth + 1));
+        }
+        _ => {}
+    }
+}
+
+fn from_json_state(document: &Html) -> Vec<Offer> {
+    let mut offers = Vec::new();
+    for value in scripts(document, r#"script#__NEXT_DATA__, script[type="application/json"]"#) {
+        collect_state_offers(&value, &mut offers, 0);
+    }
+    offers
+}
+
+fn attr_or_text(document: &Html, css: &str) -> Option<String> {
+    let selector = Selector::parse(css).ok()?;
+    let el = document.select(&selector).next()?;
+    let v = el.value();
+    let text = v.attr("content").or_else(|| v.attr("href")).map(str::to_string).unwrap_or_else(|| el.text().collect::<String>());
+    Some(text.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+fn from_meta(document: &Html) -> Vec<Offer> {
+    let price = ["meta[property=\"product:price:amount\"]", "meta[property=\"og:price:amount\"]", "[itemprop=\"price\"]"]
+        .iter()
+        .find_map(|css| attr_or_text(document, css))
+        .and_then(|t| parse_price_minor(&t));
+    let Some(price_minor) = price else { return Vec::new() };
+    let availability = ["meta[property=\"product:availability\"]", "[itemprop=\"availability\"]"].iter().find_map(|css| attr_or_text(document, css)).unwrap_or_default().to_ascii_lowercase();
+    let sold_out = availability.contains("outofstock") || availability.contains("out of stock") || availability.contains("oos") || availability.contains("soldout");
+    vec![Offer { sku: None, price_minor, stock: if sold_out { 0 } else { NOMINAL_STOCK } }]
 }
 
 #[cfg(test)]
@@ -134,6 +195,22 @@ mod tests {
         let html = page(r#"{"@graph":[{"@type":"Product","offers":[{"@type":"Offer","sku":"S","price":"10"},{"@type":"Offer","sku":"M","price":"12","availability":"OutOfStock"}]}]}"#);
         let offers = parse_offers(&html);
         assert_eq!(offers.iter().map(|o| (o.sku.clone().unwrap(), o.price_minor, o.stock)).collect::<Vec<_>>(), vec![("S".into(), 1000, 99), ("M".into(), 1200, 0)]);
+    }
+
+    #[test]
+    fn cascade_falls_back_to_json_state_then_meta_and_prefers_the_reliable_source() {
+        let state = r#"<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"product":{"offers":[{"sku":"S1","price":"2 490","availability":"OutOfStock"},{"sku":"S2","price":3100,"inventoryLevel":4}]}}}}</script>"#;
+        let offers = parse_offers(state);
+        assert_eq!(offers.iter().map(|o| (o.sku.clone().unwrap(), o.price_minor, o.stock)).collect::<Vec<_>>(), vec![("S1".into(), 249_000, 0), ("S2".into(), 310_000, 4)]);
+
+        let meta = r#"<meta property="product:price:amount" content="1 990,00"><meta property="product:availability" content="out of stock">"#;
+        assert_eq!(parse_offers(meta), vec![Offer { sku: None, price_minor: 199_000, stock: 0 }]);
+        let micro = r#"<span itemprop="price" content="499.90"></span><link itemprop="availability" href="https://schema.org/InStock">"#;
+        assert_eq!(parse_offers(micro), vec![Offer { sku: None, price_minor: 49_990, stock: 99 }]);
+
+        let both = format!("{state}{}", page(r#"{"@type":"Product","offers":{"@type":"Offer","price":"1"}}"#));
+        assert_eq!(parse_offers(&both).len(), 2, "JSON-состояние приоритетнее JSON-LD");
+        assert!(parse_offers(r#"<meta property="product:price:amount" content="бесплатно">"#).is_empty());
     }
 
     #[test]
