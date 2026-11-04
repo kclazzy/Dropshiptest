@@ -123,8 +123,9 @@ public:
     // true, если этот вызов перевёл задачу из IN_PROGRESS в COMPLETED.
     Result<bool> completeTask(std::int64_t taskId);
 
+    // allowRetry=false — ошибка окончательная (неверный ключ, битые данные): сразу FAILED.
     Result<FailOutcome> failTask(std::int64_t taskId, std::string_view errorMessage, UnixSeconds now,
-                                 std::chrono::seconds retryDelay = std::chrono::seconds(30));
+                                 std::chrono::seconds retryDelay = std::chrono::seconds(30), bool allowRetry = true);
 
 private:
     DatabaseManager();

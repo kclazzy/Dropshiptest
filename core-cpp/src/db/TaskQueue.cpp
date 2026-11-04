@@ -116,18 +116,18 @@ Result<bool> DatabaseManager::completeTask(std::int64_t taskId) {
 }
 
 Result<FailOutcome> DatabaseManager::failTask(std::int64_t taskId, std::string_view errorMessage, UnixSeconds now,
-                                              std::chrono::seconds retryDelay) {
+                                              std::chrono::seconds retryDelay, bool allowRetry) {
     const UnixSeconds retryAt = now + static_cast<std::int64_t>(retryDelay.count());
     FailOutcome outcome = FailOutcome::NotInProgress;
 
     const auto done = transaction([&](Tx& tx) -> Result<void> {
         const auto rows = tx.query(
             "UPDATE task_queue SET "
-            "status = CASE WHEN attempts >= max_attempts THEN 'FAILED' ELSE 'PENDING' END, "
-            "scheduled_at = CASE WHEN attempts >= max_attempts THEN scheduled_at ELSE ? END, "
+            "status = CASE WHEN ? = 0 OR attempts >= max_attempts THEN 'FAILED' ELSE 'PENDING' END, "
+            "scheduled_at = CASE WHEN ? = 0 OR attempts >= max_attempts THEN scheduled_at ELSE ? END, "
             "locked_at = 0, error_log = ? "
             "WHERE id = ? AND status = 'IN_PROGRESS' RETURNING status",
-            {retryAt, std::string(errorMessage), taskId});
+            {std::int64_t{allowRetry ? 1 : 0}, std::int64_t{allowRetry ? 1 : 0}, retryAt, std::string(errorMessage), taskId});
         if (!rows) return unexpected(rows.error());
         if (rows->rows.empty()) return {};
         outcome = rows->textAt(0, "status") == "FAILED" ? FailOutcome::Exhausted : FailOutcome::WillRetry;

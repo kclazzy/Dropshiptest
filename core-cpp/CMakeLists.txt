@@ -50,6 +50,7 @@ add_library(dropship_core STATIC
   src/ai/OllamaClient.cpp
   src/ai/CloudClient.cpp
   src/ai/AiFactory.cpp
+  src/ai/AiWorker.cpp
   src/bridge/JsonRpc.cpp
   src/bridge/RpcRouter.cpp
   src/bridge/SupplierSessionStore.cpp
@@ -80,6 +81,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_bridge.cpp
     tests/test_cloud.cpp
     tests/test_ai_factory.cpp
+    tests/test_ai_worker.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

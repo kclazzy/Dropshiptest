@@ -119,6 +119,16 @@ TEST(queue_failure_retries_with_delay_then_exhausts) {
     CHECK(!claim(*db, 100000).has_value());
 }
 
+TEST(queue_permanent_failure_skips_remaining_attempts) {
+    TempDir dir;
+    auto db = openDb(dir);
+    const auto id = enqueue(*db, TaskType::AiRewrite, 5, 0, "{}", 5);
+    claim(*db, 10);
+    CHECK(unwrap(db->failTask(id, "invalid api key", 10, seconds(60), /*allowRetry=*/false)) == FailOutcome::Exhausted);
+    CHECK_EQ(statusOf(*db, id), std::string("FAILED"));
+    CHECK(!claim(*db, 100000).has_value());
+}
+
 TEST(queue_fail_ignores_tasks_that_are_not_in_progress) {
     TempDir dir;
     auto db = openDb(dir);
