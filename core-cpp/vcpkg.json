@@ -1,7 +1,0 @@
-{
-  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "name": "dropship-core",
-  "version-string": "0.1.0",
-  "description": "Local-first dropshipping automation core (C++20)",
-  "dependencies": ["sqlite3", "curl", "openssl", "nlohmann-json", "boost-beast", "boost-asio"]
-}
