@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn foreign_s10_is_accepted_but_flagged() {
-        assert_eq!(check("RB123456785CN").unwrap().foreign_origin, true);
+        assert!(check("RB123456785CN").unwrap().foreign_origin);
     }
 
     #[test]

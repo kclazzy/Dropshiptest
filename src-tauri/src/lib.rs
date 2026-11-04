@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod bridge;
 pub mod catalog;
+pub mod categories;
 pub mod commands;
 pub mod db;
 pub mod error;
