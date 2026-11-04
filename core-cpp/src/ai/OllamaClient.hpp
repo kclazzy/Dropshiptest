@@ -8,11 +8,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
-#include <vector>
 
-#include "core/Expected.hpp"
-#include "core/Json.hpp"
+#include "ai/ContentGenerator.hpp"
 #include "net/HttpTransport.hpp"
 
 namespace dropship::ai {
@@ -30,52 +27,17 @@ struct OllamaConfig {
     std::chrono::seconds timeout{300};
 };
 
-struct ProductSource {
-    std::string title;
-    std::string description;
-    std::vector<std::pair<std::string, std::string>> attributes;
-};
-
-struct GeneratedContent {
-    std::string seoTitle;
-    std::string htmlDescription;  // уже очищено sanitizeHtml
-    std::vector<std::string> bulletPoints;
-    std::vector<std::string> searchTags;
-};
-
-enum class AiErrorKind {
-    Transport,       // Ollama недоступна
-    Http,            // статус != 200
-    Malformed,       // ответ не разобрался как ожидается
-    InvalidContent,  // JSON разобрался, но содержимое непригодно
-};
-
-struct AiError {
-    AiErrorKind kind = AiErrorKind::Malformed;
-    int httpStatus = 0;
-    std::string message;
-
-    // Имеет ли смысл повторить тот же запрос (сеть, 5xx/429, «плохая» генерация).
-    bool retryable() const noexcept;
-};
-
-template <class T>
-using Result = Expected<T, AiError>;
-
-Json contentSchema();
 Json buildChatRequest(const OllamaConfig& config, const ProductSource& source);
 Result<GeneratedContent> parseChatResponse(int httpStatus, std::string_view body);
 
-// Обрезает строку до maxBytes, не разрывая многобайтовый символ UTF-8.
-std::string truncateUtf8(std::string_view text, std::size_t maxBytes);
-
 enum class OllamaStatus { Ready, NotRunning, ModelMissing, Unexpected };
 
-class OllamaClient {
+class OllamaClient final : public IContentGenerator {
 public:
     OllamaClient(OllamaConfig config, std::shared_ptr<net::IHttpTransport> transport);
 
-    Result<GeneratedContent> generate(const ProductSource& source);
+    Result<GeneratedContent> generate(const ProductSource& source) override;
+    std::string name() const override { return "ollama:" + config_.model; }
     OllamaStatus checkStatus();
 
     const OllamaConfig& config() const noexcept { return config_; }
