@@ -44,6 +44,7 @@ Expected<Json, RpcError> handleCookies(CoreServices& services, const Json& param
 
     const auto stored = services.sessions.update(domain->get<std::string>(), cookies, userAgent, services.clock());
     if (!stored) return unexpected(invalidParams(stored.error()));
+    if (services.onSessionUpdated) services.onSessionUpdated(domain->get<std::string>());
     return Json{{"stored", cookies.size()}};
 }
 

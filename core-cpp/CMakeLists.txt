@@ -43,6 +43,11 @@ add_library(dropship_core STATIC
   src/db/TaskQueue.cpp
   src/db/Bootstrap.cpp
   src/update/Updater.cpp
+  src/monitor/PageParser.cpp
+  src/monitor/ProxyPool.cpp
+  src/monitor/DomainLimiter.cpp
+  src/monitor/StateApplier.cpp
+  src/monitor/PriceSync.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -91,6 +96,10 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_ai_worker.cpp
     tests/test_bootstrap.cpp
     tests/test_updater.cpp
+    tests/test_page_parser.cpp
+    tests/test_proxy_limiter.cpp
+    tests/test_monitor_apply.cpp
+    tests/test_price_sync.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

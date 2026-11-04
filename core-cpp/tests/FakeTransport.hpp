@@ -12,7 +12,9 @@ class FakeTransport : public dropship::net::IHttpTransport {
 public:
     using Reply = dropship::Expected<dropship::net::HttpResponse, dropship::net::TransportError>;
 
-    void reply(int status, std::string body) { replies.emplace_back(dropship::net::HttpResponse{status, std::move(body)}); }
+    void reply(int status, std::string body, std::string redirectUrl = {}) {
+        replies.emplace_back(dropship::net::HttpResponse{status, std::move(body), std::move(redirectUrl)});
+    }
     void fail(std::string message) {
         replies.emplace_back(dropship::unexpected(dropship::net::TransportError{std::move(message)}));
     }

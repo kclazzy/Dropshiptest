@@ -13,6 +13,8 @@ struct CoreServices {
     db::DatabaseManager& db;
     SupplierSessionStore& sessions;
     std::function<UnixSeconds()> clock;  // подменяется в тестах
+    // Вызывается после успешного сохранения сессии домена (например, чтобы возобновить мониторинг).
+    std::function<void(const std::string& domain)> onSessionUpdated;
 };
 
 // Методы расширение -> ядро:

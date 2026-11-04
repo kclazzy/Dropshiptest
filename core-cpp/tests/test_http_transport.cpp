@@ -118,3 +118,43 @@ TEST(curl_does_not_follow_redirects) {
     CHECK_EQ(r->status, 302);
     CHECK_EQ(server.requests().size(), std::size_t{1});
 }
+
+TEST(curl_exposes_the_redirect_target_without_following_it) {
+    testnet::TestHttpServer server;
+    server.status = 301;
+    server.responseBody = "";
+    server.location = "https://other.example/new";
+    CurlTransport transport;
+    const auto r = transport.send(get(server.url()));
+    REQUIRE(r.has_value());
+    CHECK_EQ(r->redirectUrl, std::string("https://other.example/new"));
+}
+
+TEST(curl_sends_requests_through_an_http_proxy) {
+    testnet::TestHttpServer proxy;  // принимает запрос как прокси: цель приходит в абсолютной форме
+    proxy.responseBody = "via-proxy";
+    CurlTransport transport;
+    auto request = get("http://origin.invalid/page");
+    request.proxy = proxy.url();
+    const auto r = transport.send(request);
+    REQUIRE(r.has_value());
+    CHECK_EQ(r->body, std::string("via-proxy"));
+    REQUIRE(proxy.requests().size() == 1);
+    CHECK_EQ(proxy.requests()[0].target, std::string("http://origin.invalid/page"));
+}
+
+TEST(curl_sends_the_cookie_header) {
+    testnet::TestHttpServer server;
+    CurlTransport transport;
+    auto request = get(server.url());
+    request.headers.emplace_back("Cookie", "sid=abc");
+    REQUIRE(transport.send(request).has_value());
+    CHECK_EQ(server.requests()[0].cookie, std::string("sid=abc"));
+}
+
+TEST(curl_rejects_proxy_urls_with_unsupported_schemes) {
+    CurlTransport transport;
+    auto request = get("http://127.0.0.1:1/");
+    request.proxy = "file:///etc/passwd";
+    CHECK(!transport.send(request).has_value());
+}

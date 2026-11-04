@@ -129,6 +129,22 @@ TEST(queue_permanent_failure_skips_remaining_attempts) {
     CHECK(!claim(*db, 100000).has_value());
 }
 
+TEST(queue_defer_returns_the_task_later_without_spending_an_attempt) {
+    TempDir dir;
+    auto db = openDb(dir);
+    const auto id = enqueue(*db, TaskType::PriceSync, 5, 0, "{}", 1);  // всего одна попытка
+    claim(*db, 100);
+    CHECK(unwrap(db->deferTask(id, 500)));
+    CHECK_EQ(statusOf(*db, id), std::string("PENDING"));
+    CHECK(!claim(*db, 499).has_value());
+    const auto again = claim(*db, 500);
+    REQUIRE(again.has_value());
+    CHECK_EQ(again->attempts, 1);  // попытка не потрачена
+    CHECK(!unwrap(db->deferTask(9999, 1)));
+    unwrap(db->completeTask(id));
+    CHECK(!unwrap(db->deferTask(id, 1)));  // завершённую задачу не оживить
+}
+
 TEST(queue_fail_ignores_tasks_that_are_not_in_progress) {
     TempDir dir;
     auto db = openDb(dir);

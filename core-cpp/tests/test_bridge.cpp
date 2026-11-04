@@ -22,10 +22,12 @@ struct Fixture {
     SupplierSessionStore sessions;
     std::shared_ptr<RpcRouter> router = std::make_shared<RpcRouter>();
     std::unique_ptr<BridgeServer> server;
+    std::vector<std::string> updatedDomains;
 
     explicit Fixture(BridgeConfig config = {}) {
         database = testdb::openDb(dir);
-        registerCoreHandlers(*router, CoreServices{*database, sessions, [] { return UnixSeconds{1000}; }});
+        registerCoreHandlers(*router, CoreServices{*database, sessions, [] { return UnixSeconds{1000}; },
+                                                   [this](const std::string& domain) { updatedDomains.push_back(domain); }});
         config.port = 0;
         config.authToken = kToken;
         auto started = BridgeServer::start(config, router);
@@ -376,6 +378,7 @@ TEST(bridge_stores_supplier_cookies) {
                               {"cookies", Json::array({Json{{"name", "a"}, {"value", "x;y"}}})}},
                          3);
     CHECK_EQ(bad["error"]["code"].get<int>(), rpc_code::kInvalidParams);
+    CHECK(f.updatedDomains == std::vector<std::string>{"shop.example"});  // отклонённая сессия хук не вызывает
 
     const Json malformed = rpc(*client, "SYNC_SUPPLIER_COOKIES", Json{{"domain", 5}}, 4);
     CHECK_EQ(malformed["error"]["code"].get<int>(), rpc_code::kInvalidParams);

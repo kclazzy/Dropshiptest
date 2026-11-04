@@ -1,6 +1,7 @@
 // Запускаемое ядро: БД + мост для расширения + ИИ-воркер. Остановка — SIGINT/SIGTERM.
 // Каталог данных: --data-dir, иначе $DROPSHIP_DATA_DIR, иначе ~/.dropship.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -21,6 +22,7 @@
 #include "core/Json.hpp"
 #include "db/Bootstrap.hpp"
 #include "db/DatabaseManager.hpp"
+#include "monitor/PriceSync.hpp"
 #include "net/CurlTransport.hpp"
 #include "update/Updater.hpp"
 
@@ -115,7 +117,13 @@ int main(int argc, char** argv) {
 
     bridge::SupplierSessionStore sessions;
     auto router = std::make_shared<bridge::RpcRouter>();
-    bridge::registerCoreHandlers(*router, {**database, sessions, nowSeconds});
+    monitor::DomainLimiter limiter;
+    bridge::registerCoreHandlers(*router, {**database, sessions, nowSeconds, [&](const std::string& domain) {
+        // Сессия обновлена (капча пройдена): снимаем ограничение домена и возвращаем карточки в мониторинг.
+        limiter.unblock(domain);
+        const auto resumed = monitor::resumeBlockedProducts(**database, domain);
+        if (resumed && *resumed > 0) logLine("monitor: resumed " + std::to_string(*resumed) + " products of " + domain);
+    }});
 
     // Обновление: проверка по релизам GitHub; установку делает скрипт запуска (код выхода 75).
     const Json settingsForUpdate = parseJson(readFile(dataDir / "settings.json"));
@@ -174,11 +182,30 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Мониторинг цен и остатков: планировщик + воркеры. Отключается "monitor": {"workers": 0}.
+    const int monitorWorkers = settingsJson.is_object() && settingsJson.contains("monitor") && settingsJson["monitor"].is_object()
+                                   ? settingsJson["monitor"].value("workers", 4)
+                                   : 4;
+    monitor::MonitorConfig monitorConfig;
+    if (settingsJson.is_object() && settingsJson.contains("monitor") && settingsJson["monitor"].is_object()) {
+        monitorConfig.scheduleEvery = std::chrono::seconds(std::clamp(settingsJson["monitor"].value("schedule_seconds", 15), 1, 3600));
+    }
+    auto monitorTransport = std::make_shared<net::CurlTransport>();
+    monitor::ProxyPool proxyPool(**database);
+    std::unique_ptr<monitor::MonitorService> monitorService;
+    if (monitorWorkers > 0) {
+        monitorService = std::make_unique<monitor::MonitorService>(
+            monitor::MonitorContext{**database, *monitorTransport, sessions, proxyPool, limiter, monitorConfig}, nowSeconds,
+            std::min(monitorWorkers, 32), logLine);
+        logLine("Monitoring: " + std::to_string(std::min(monitorWorkers, 32)) + " workers");
+    }
+
     logLine(std::string("Dropship core ") + DROPSHIP_VERSION + " is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
     logLine("Access token file: " + (dataDir / "bridge.token").string());
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     logLine("stopping...");
+    monitorService.reset();
     worker.reset();  // сначала воркер: он использует БД и генератор
     server->reset();
     return g_exitCode;

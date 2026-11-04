@@ -123,6 +123,10 @@ public:
     // true, если этот вызов перевёл задачу из IN_PROGRESS в COMPLETED.
     Result<bool> completeTask(std::int64_t taskId);
 
+    // Вернуть захваченную задачу в очередь до момента `until`, не расходуя попытку
+    // (например, домен временно ограничен лимитером). true — задача была в работе.
+    Result<bool> deferTask(std::int64_t taskId, UnixSeconds until);
+
     // allowRetry=false — ошибка окончательная (неверный ключ, битые данные): сразу FAILED.
     Result<FailOutcome> failTask(std::int64_t taskId, std::string_view errorMessage, UnixSeconds now,
                                  std::chrono::seconds retryDelay = std::chrono::seconds(30), bool allowRetry = true);

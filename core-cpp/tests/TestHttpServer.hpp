@@ -26,12 +26,15 @@ struct RecordedRequest {
     std::string contentType;
     std::string authorization;
     std::string xApiKey;
+    std::string cookie;
+    std::string host;
 };
 
 class TestHttpServer {
 public:
     int status = 200;
     std::string responseBody = "{}";
+    std::string location;                 // заголовок Location (для редиректов)
     std::chrono::milliseconds delay{0};   // задержка перед ответом (для проверки таймаута)
 
     TestHttpServer() : acceptor_(ioc_, tcp::endpoint(net::ip::make_address("127.0.0.1"), 0)) {
@@ -72,11 +75,13 @@ private:
                 std::lock_guard lock(mutex_);
                 requests_.push_back({std::string(req.method_string()), std::string(req.target()), req.body(),
                                      std::string(req[http::field::content_type]),
-                                     std::string(req[http::field::authorization]), std::string(req["x-api-key"])});
+                                     std::string(req[http::field::authorization]), std::string(req["x-api-key"]),
+                                     std::string(req[http::field::cookie]), std::string(req[http::field::host])});
             }
             std::this_thread::sleep_for(delay);
             http::response<http::string_body> res{static_cast<http::status>(status), req.version()};
             res.set(http::field::content_type, "application/json");
+            if (!location.empty()) res.set(http::field::location, location);
             res.keep_alive(false);
             res.body() = responseBody;
             res.prepare_payload();

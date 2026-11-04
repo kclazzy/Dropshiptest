@@ -2,6 +2,8 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
+#include <iterator>
 #include <memory>
 #include <mutex>
 
@@ -65,6 +67,15 @@ Expected<HttpResponse, TransportError> CurlTransport::send(const HttpRequest& re
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &sink);
     curl_easy_setopt(handle, CURLOPT_ERRORBUFFER, errorBuffer);
 
+    if (!request.proxy.empty()) {
+        // Схема прокси ограничена списком: иначе libcurl принял бы и file://, и произвольные протоколы.
+        static constexpr const char* kProxySchemes[] = {"http://", "https://", "socks5://", "socks5h://", "socks4://", "socks4a://"};
+        const bool allowed = std::any_of(std::begin(kProxySchemes), std::end(kProxySchemes),
+                                         [&](const char* scheme) { return request.proxy.rfind(scheme, 0) == 0; });
+        if (!allowed) return unexpected(failure("unsupported proxy scheme"));
+        curl_easy_setopt(handle, CURLOPT_PROXY, request.proxy.c_str());
+    }
+
     std::unique_ptr<curl_slist, HeaderListDeleter> headers;
     if (request.method == HttpRequest::Method::Post) {
         curl_easy_setopt(handle, CURLOPT_POST, 1L);
@@ -85,7 +96,14 @@ Expected<HttpResponse, TransportError> CurlTransport::send(const HttpRequest& re
 
     long status = 0;
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
-    return HttpResponse{static_cast<int>(status), std::move(sink.body)};
+    HttpResponse response{static_cast<int>(status), std::move(sink.body), {}};
+    if (status >= 300 && status < 400) {
+        char* location = nullptr;
+        if (curl_easy_getinfo(handle, CURLINFO_REDIRECT_URL, &location) == CURLE_OK && location != nullptr) {
+            response.redirectUrl = location;
+        }
+    }
+    return response;
 }
 
 }  // namespace dropship::net

@@ -18,12 +18,14 @@ struct HttpRequest {
     std::string url;
     std::string body;  // для POST отправляется как application/json
     std::vector<std::pair<std::string, std::string>> headers;  // например Authorization для облачных API
+    std::string proxy;  // http://, https://, socks5://[user:pass@]host:port; пусто — без прокси
     std::chrono::milliseconds timeout{30'000};
 };
 
 struct HttpResponse {
     int status = 0;
     std::string body;
+    std::string redirectUrl;  // абсолютный адрес из Location для 3xx; пусто в остальных случаях
 };
 
 // Не удалось получить ответ вообще (нет соединения, таймаут, слишком большой ответ).

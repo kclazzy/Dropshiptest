@@ -115,6 +115,15 @@ Result<bool> DatabaseManager::completeTask(std::int64_t taskId) {
     return updated->changes > 0;
 }
 
+Result<bool> DatabaseManager::deferTask(std::int64_t taskId, UnixSeconds until) {
+    const auto updated = execute(
+        "UPDATE task_queue SET status = 'PENDING', scheduled_at = ?, locked_at = 0, "
+        "attempts = MAX(attempts - 1, 0) WHERE id = ? AND status = 'IN_PROGRESS'",
+        {until, taskId});
+    if (!updated) return unexpected(updated.error());
+    return updated->changes > 0;
+}
+
 Result<FailOutcome> DatabaseManager::failTask(std::int64_t taskId, std::string_view errorMessage, UnixSeconds now,
                                               std::chrono::seconds retryDelay, bool allowRetry) {
     const UnixSeconds retryAt = now + static_cast<std::int64_t>(retryDelay.count());
