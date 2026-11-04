@@ -5,6 +5,7 @@ using namespace dropship;
 
 // Эти строки хранятся в БД: переименование сломает существующие данные.
 TEST(domain_platform_names_are_stable) {
+    CHECK_EQ(toString(Platform::Local), std::string_view{"local"});
     CHECK_EQ(toString(Platform::Ozon), std::string_view{"ozon"});
     CHECK_EQ(toString(Platform::Avito), std::string_view{"avito"});
     CHECK_EQ(toString(Platform::YandexMarket), std::string_view{"yandex_market"});

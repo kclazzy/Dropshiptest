@@ -43,9 +43,10 @@ constexpr std::string_view nameOf(const std::array<EnumName<E>, N>& table, E val
 }  // namespace detail
 
 // Площадка-витрина (stores.platform_type).
-enum class Platform { Shopify, WooCommerce, Ebay, Ozon, Avito, Wildberries, YandexMarket };
+enum class Platform { Local, Shopify, WooCommerce, Ebay, Ozon, Avito, Wildberries, YandexMarket };
 
-inline constexpr std::array<detail::EnumName<Platform>, 7> kPlatformNames{{
+inline constexpr std::array<detail::EnumName<Platform>, 8> kPlatformNames{{
+    {Platform::Local, "local"},  // каталог без публикации на площадку
     {Platform::Shopify, "shopify"},
     {Platform::WooCommerce, "woocommerce"},
     {Platform::Ebay, "ebay"},

@@ -41,6 +41,7 @@ add_library(dropship_core STATIC
   src/db/DatabaseManager.cpp
   src/db/Migrations.cpp
   src/db/TaskQueue.cpp
+  src/db/Bootstrap.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -86,6 +87,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_cloud.cpp
     tests/test_ai_factory.cpp
     tests/test_ai_worker.cpp
+    tests/test_bootstrap.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

@@ -19,6 +19,7 @@
 #include "bridge/SupplierSessionStore.hpp"
 #include "bridge/TokenStore.hpp"
 #include "core/Json.hpp"
+#include "db/Bootstrap.hpp"
 #include "db/DatabaseManager.hpp"
 #include "net/CurlTransport.hpp"
 
@@ -100,6 +101,10 @@ int main(int argc, char** argv) {
         logLine("database error: " + database.error().message);
         return 1;
     }
+    if (const auto store = db::ensureDefaultStore(**database, nowSeconds()); !store) {
+        logLine("database error: " + store.error().message);
+        return 1;
+    }
     auto token = bridge::loadOrCreateToken(dataDir / "bridge.token");
     if (!token) {
         logLine("token error: " + token.error());
@@ -142,7 +147,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    logLine("Dropship core is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()));
+    logLine("Dropship core is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
     logLine("Access token file: " + (dataDir / "bridge.token").string());
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
