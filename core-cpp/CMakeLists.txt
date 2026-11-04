@@ -58,6 +58,7 @@ add_library(dropship_core STATIC
   src/orders/Orders.cpp
   src/orders/AutoOrder.cpp
   src/orders/Tracking.cpp
+  src/orders/OrderService.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp

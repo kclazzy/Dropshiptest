@@ -156,3 +156,19 @@ TEST(fulfillment_validates_input_and_handles_failures) {
     CHECK(unwrap(applyFulfillment(*rig.db, {rig.orderId, FulfillmentStatus::Ordered, "MANUAL-1", ""}, 6)));
     CHECK_EQ(rig.status(), std::string("ORDERED"));
 }
+
+#include <thread>
+#include "orders/OrderService.hpp"
+
+TEST(order_service_thread_sends_the_command_and_stops_quickly) {
+    Rig rig;
+    const auto started = std::chrono::steady_clock::now();
+    {
+        OrderService service(*rig.db, rig.link, nullptr, [] { return UnixSeconds{100}; });
+        for (int i = 0; i < 200 && scalarInt(*rig.db, "SELECT COUNT(*) FROM orders WHERE status = 'QUEUED_FOR_EXT'") == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    CHECK_EQ(rig.link.commands.size(), std::size_t{1});
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::milliseconds(2500));
+}

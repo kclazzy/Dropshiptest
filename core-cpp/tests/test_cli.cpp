@@ -87,3 +87,33 @@ TEST(cli_recognises_its_commands_only) {
     CHECK(!cli::isCommand("--port"));
     CHECK(!cli::isCommand(""));
 }
+
+TEST(cli_order_commands_cover_the_manual_flow) {
+    TempDir dir;
+    auto db = openDb(dir);
+    const auto f = insertFixture(*db);
+    unwrap(db->execute("UPDATE product_variants SET external_variant_id = 'OFFER-1' WHERE id = ?", {f.variantId}));
+    unwrap(db->execute(
+        "INSERT INTO pricing_rules(store_id, price_from_cents, price_to_cents, margin_percent, fixed_markup_cents, "
+        "marketplace_fee_percent, rounding_cents, min_stock_threshold, min_profit_cents) VALUES(?, 0, 9000000000000, 0, 0, 10.0, NULL, 1, 200)",
+        {f.storeId}));
+    const std::string store = std::to_string(f.storeId);
+    const auto add = cmd(*db, kVault, {"order-add", "--store", store, "--id", "A-1", "--offer", "OFFER-1", "--qty", "1", "--total", "144.99"},
+                         R"({"city":"Тула"})");
+    CHECK_EQ(add.code, 0);
+    CHECK(add.out.find("queued") != std::string::npos);
+    CHECK_EQ(cmd(*db, kVault, {"order-add", "--store", store, "--id", "A-1", "--offer", "OFFER-1", "--qty", "1", "--total", "144.99"}, "{}").code, 0);
+    CHECK_EQ(scalarInt(*db, "SELECT COUNT(*) FROM orders"), 1);
+    CHECK_EQ(cmd(*db, kVault, {"order-add", "--store", store, "--id", "A-2", "--offer", "OFFER-1", "--qty", "1", "--total", "12.345"}, "{}").code, 2);
+    CHECK_EQ(cmd(*db, kVault, {"order-add", "--store", store, "--id", "A-2", "--offer", "OFFER-1", "--qty", "1", "--total", "144.99"}, "garbage").code, 2);
+
+    CHECK_EQ(cmd(*db, kVault, {"order-track", "--order", "1", "--number", "T1"}).code, 2);  // ещё не куплен
+    CHECK_EQ(cmd(*db, kVault, {"order-done", "--order", "1", "--supplier-order", "S-5"}).code, 0);
+    CHECK_EQ(cmd(*db, kVault, {"order-track", "--order", "1", "--number", "T1", "--carrier", "CDEK"}).code, 0);
+    const auto list = cmd(*db, kVault, {"orders", "--status", "SHIPPED"});
+    CHECK(list.out.find("A-1") != std::string::npos);
+    CHECK(list.out.find("T1") != std::string::npos);
+    CHECK(cmd(*db, kVault, {"orders", "--status", "NEW"}).out.find("A-1") == std::string::npos);
+    CHECK_EQ(cmd(*db, kVault, {"order-retry", "--order", "1"}).code, 0);
+    CHECK_EQ(cmd(*db, kVault, {"order-done", "--order", "x", "--supplier-order", "S"}).code, 2);
+}

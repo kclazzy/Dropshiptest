@@ -17,6 +17,7 @@
 #include "app/Cli.hpp"
 #include "store/StoreSync.hpp"
 #include "ai/AiWorker.hpp"
+#include "orders/OrderService.hpp"
 #include "bridge/BridgeServer.hpp"
 #include "bridge/Handlers.hpp"
 #include "bridge/SupplierSessionStore.hpp"
@@ -242,11 +243,27 @@ int main(int argc, char** argv) {
         storeSync = std::make_unique<store::StoreSyncService>(**database, *storeRegistry, nowSeconds, logLine);
     }
 
+    // Заказы: покупка через расширение, треки в магазины, опрос новых заказов площадок.
+    class BridgeLink : public orders::IExtensionLink {
+    public:
+        explicit BridgeLink(bridge::BridgeServer& server) : server_(server) {}
+        bool connected() const override { return server_.extensionConnected(); }
+        Expected<Json, bridge::RpcError> call(const std::string& method, const Json& params,
+                                              std::chrono::milliseconds timeout) override {
+            return server_.call(method, params, timeout).get();
+        }
+    private:
+        bridge::BridgeServer& server_;
+    };
+    BridgeLink extensionLink(**server);
+    auto orderService = std::make_unique<orders::OrderService>(**database, extensionLink, storeRegistry.get(), nowSeconds, logLine);
+
     logLine(std::string("Dropship core ") + DROPSHIP_VERSION + " is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
     logLine("Access token file: " + (dataDir / "bridge.token").string());
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     logLine("stopping...");
+    orderService.reset();  // первым: использует мост, базу и адаптеры
     storeSync.reset();
     monitorService.reset();
     worker.reset();  // сначала воркер: он использует БД и генератор
