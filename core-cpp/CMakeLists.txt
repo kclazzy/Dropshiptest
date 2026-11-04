@@ -48,6 +48,12 @@ add_library(dropship_core STATIC
   src/monitor/DomainLimiter.cpp
   src/monitor/StateApplier.cpp
   src/monitor/PriceSync.cpp
+  src/store/RateLimiter.cpp
+  src/store/CredentialVault.cpp
+  src/store/OzonAdapter.cpp
+  src/store/AvitoAdapter.cpp
+  src/store/StoreSync.cpp
+  src/app/Cli.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -100,6 +106,11 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_proxy_limiter.cpp
     tests/test_monitor_apply.cpp
     tests/test_price_sync.cpp
+    tests/test_store_basics.cpp
+    tests/test_store_adapters.cpp
+    tests/test_store_sync.cpp
+    tests/test_store_registry.cpp
+    tests/test_cli.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

@@ -9,6 +9,6 @@ namespace dropship::db {
 // (в том числе после сбоя посередине или из двух процессов) приводит к тому же состоянию.
 Result<void> migrate(Connection& writer);
 
-inline constexpr int kLatestSchemaVersion = 2;
+inline constexpr int kLatestSchemaVersion = 3;
 
 }  // namespace dropship::db

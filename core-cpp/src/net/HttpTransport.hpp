@@ -13,10 +13,11 @@
 namespace dropship::net {
 
 struct HttpRequest {
-    enum class Method { Get, Post };
+    enum class Method { Get, Post, Put };
     Method method = Method::Get;
     std::string url;
-    std::string body;  // для POST отправляется как application/json
+    std::string body;  // для POST/PUT; тип содержимого — contentType
+    std::string contentType = "application/json";
     std::vector<std::pair<std::string, std::string>> headers;  // например Authorization для облачных API
     std::string proxy;  // http://, https://, socks5://[user:pass@]host:port; пусто — без прокси
     std::chrono::milliseconds timeout{30'000};

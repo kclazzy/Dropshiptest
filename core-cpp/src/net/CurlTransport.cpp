@@ -77,11 +77,12 @@ Expected<HttpResponse, TransportError> CurlTransport::send(const HttpRequest& re
     }
 
     std::unique_ptr<curl_slist, HeaderListDeleter> headers;
-    if (request.method == HttpRequest::Method::Post) {
+    if (request.method != HttpRequest::Method::Get) {
         curl_easy_setopt(handle, CURLOPT_POST, 1L);
+        if (request.method == HttpRequest::Method::Put) curl_easy_setopt(handle, CURLOPT_CUSTOMREQUEST, "PUT");
         curl_easy_setopt(handle, CURLOPT_POSTFIELDS, request.body.c_str());
         curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(request.body.size()));
-        headers.reset(curl_slist_append(headers.release(), "Content-Type: application/json"));
+        headers.reset(curl_slist_append(headers.release(), ("Content-Type: " + request.contentType).c_str()));
     }
     for (const auto& [name, value] : request.headers) {
         headers.reset(curl_slist_append(headers.release(), (name + ": " + value).c_str()));

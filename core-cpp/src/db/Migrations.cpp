@@ -218,9 +218,25 @@ LEFT JOIN product_variants v ON v.product_id = p.id
 GROUP BY p.id;
 )SQL";
 
+// v3: что уже отправлено на витрину (идемпотентная синхронизация) и последняя ошибка магазина.
+constexpr std::string_view kV3StoreSync = R"SQL(
+ALTER TABLE product_variants ADD COLUMN published_hash TEXT;
+ALTER TABLE product_variants ADD COLUMN rejected_hash TEXT;  -- состояние, которое площадка отклонила: не долбим повторно
+ALTER TABLE stores ADD COLUMN last_error TEXT;
+CREATE INDEX idx_variants_external ON product_variants(external_variant_id);
+
+-- Привязка к карточке на витрине изменилась (или исправлена): отправку нужно выполнить заново.
+CREATE TRIGGER trg_variants_relink AFTER UPDATE OF external_variant_id ON product_variants
+WHEN OLD.external_variant_id IS NOT NEW.external_variant_id
+BEGIN
+    UPDATE product_variants SET published_hash = NULL, rejected_hash = NULL WHERE id = NEW.id;
+END;
+)SQL";
+
 constexpr Migration kMigrations[] = {
     {1, kV1CoreSchema},
     {2, kV2HistoryAndEditing},
+    {3, kV3StoreSync},
 };
 
 static_assert(std::size(kMigrations) == kLatestSchemaVersion &&

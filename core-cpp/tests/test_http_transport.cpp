@@ -158,3 +158,19 @@ TEST(curl_rejects_proxy_urls_with_unsupported_schemes) {
     request.proxy = "file:///etc/passwd";
     CHECK(!transport.send(request).has_value());
 }
+
+TEST(curl_put_and_custom_content_type) {
+    testnet::TestHttpServer server;
+    CurlTransport transport;
+    HttpRequest request;
+    request.method = HttpRequest::Method::Put;
+    request.url = server.url("/stocks");
+    request.body = "grant_type=client_credentials";
+    request.contentType = "application/x-www-form-urlencoded";
+    REQUIRE(transport.send(request).has_value());
+    const auto seen = server.requests();
+    REQUIRE(seen.size() == 1);
+    CHECK_EQ(seen[0].method, std::string("PUT"));
+    CHECK_EQ(seen[0].contentType, std::string("application/x-www-form-urlencoded"));
+    CHECK_EQ(seen[0].body, std::string("grant_type=client_credentials"));
+}

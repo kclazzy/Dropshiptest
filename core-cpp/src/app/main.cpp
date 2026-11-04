@@ -14,6 +14,8 @@
 #include <thread>
 
 #include "ai/AiFactory.hpp"
+#include "app/Cli.hpp"
+#include "store/StoreSync.hpp"
 #include "ai/AiWorker.hpp"
 #include "bridge/BridgeServer.hpp"
 #include "bridge/Handlers.hpp"
@@ -79,6 +81,32 @@ ai::ApiKeyLookup makeKeyLookup(const fs::path& dataDir) {
 int main(int argc, char** argv) {
     fs::path dataDir = defaultDataDir();
     std::uint16_t port = 8765;
+    std::vector<std::string> commandArgs;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--data-dir" && i + 1 < argc) {
+            dataDir = argv[++i];
+        } else if (commandArgs.empty() && cli::isCommand(arg)) {
+            commandArgs.push_back(arg);
+        } else if (!commandArgs.empty()) {
+            commandArgs.push_back(arg);
+        }
+    }
+    if (!commandArgs.empty()) {
+        std::error_code mkdirError;
+        fs::create_directories(dataDir, mkdirError);
+        auto database = db::DatabaseManager::open(dataDir / "dropship.db");
+        if (!database) {
+            std::cerr << "database error: " << database.error().message << "\n";
+            return 1;
+        }
+        auto vault = store::CredentialVault::openOrCreate(dataDir / "secret.key");
+        if (!vault) {
+            std::cerr << vault.error() << "\n";
+            return 1;
+        }
+        return cli::run(commandArgs, **database, *vault, std::cin, std::cout, std::cerr, nowSeconds());
+    }
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--data-dir" && i + 1 < argc) {
@@ -200,11 +228,26 @@ int main(int argc, char** argv) {
         logLine("Monitoring: " + std::to_string(std::min(monitorWorkers, 32)) + " workers");
     }
 
+    // Отправка цен и остатков на витрины (Ozon, Avito). Учётные данные — в зашифрованном виде в БД.
+    auto vault = store::CredentialVault::openOrCreate(dataDir / "secret.key");
+    auto storeTransport = std::make_shared<net::CurlTransport>();
+    std::unique_ptr<store::StoreRegistry> storeRegistry;
+    std::unique_ptr<store::StoreSyncService> storeSync;
+    if (!vault) {
+        logLine("store sync disabled: " + vault.error());
+    } else {
+        storeRegistry = std::make_unique<store::StoreRegistry>(
+            **database, *vault, *storeTransport,
+            [] { return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count(); });
+        storeSync = std::make_unique<store::StoreSyncService>(**database, *storeRegistry, nowSeconds, logLine);
+    }
+
     logLine(std::string("Dropship core ") + DROPSHIP_VERSION + " is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
     logLine("Access token file: " + (dataDir / "bridge.token").string());
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     logLine("stopping...");
+    storeSync.reset();
     monitorService.reset();
     worker.reset();  // сначала воркер: он использует БД и генератор
     server->reset();
