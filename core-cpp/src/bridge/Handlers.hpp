@@ -21,7 +21,9 @@ struct CoreServices {
 //   PING                      -> {"pong":true,"time":<unix>}
 //   IMPORT_PRODUCT_PAYLOAD    -> {"product_id","duplicate","variants"}
 //   SYNC_SUPPLIER_COOKIES     -> {"stored":<число кук>}
-// ORDER_FULFILLMENT_RESULT появится вместе с модулем автовыкупа.
+//   ORDER_FULFILLMENT_RESULT  {order_id,status:ordered|failed|needs_manual,supplier_order_id?,message?} -> {"changed"}
+//   ORDER_TRACKING_UPDATE     {order_id,tracking_number,carrier?} -> {"changed"}
+//   LIST_ORDERS               {status?} -> {"orders":[...]} (адрес покупателя, ссылка и артикул поставщика)
 // Объекты в `services` должны жить дольше router.
 void registerCoreHandlers(RpcRouter& router, CoreServices services);
 

@@ -118,6 +118,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_orders.cpp
     tests/test_auto_order.cpp
     tests/test_tracking.cpp
+    tests/test_order_rpc.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)
