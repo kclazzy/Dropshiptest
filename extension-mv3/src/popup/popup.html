@@ -15,6 +15,7 @@
     #message { margin-top: 10px; min-height: 18px; white-space: pre-wrap; }
     #message.error { color: #b3261e; }
     details { margin-top: 12px; }
+    #update { margin-top: 12px; padding: 8px; background: #fff4d6; border-radius: 6px; }
   </style>
 </head>
 <body>
@@ -23,6 +24,10 @@
   <button id="import" class="primary">Добавить товар с этой страницы</button>
   <button id="cookies">Передать сессию сайта в ядро</button>
   <div id="message"></div>
+  <div id="update" hidden>
+    <span id="update-text"></span>
+    <button id="update-apply" class="primary">Обновить в один клик</button>
+  </div>
   <details id="settings">
     <summary>Настройки</summary>
     <label for="token">Токен доступа (файл bridge.token)</label>

@@ -5,7 +5,9 @@ export type PopupRequest =
   | { type: 'status' }
   | { type: 'save-settings'; token: string; storeId: number | null }
   | { type: 'import'; product: ProductPayload }
-  | { type: 'sync-cookies'; pageUrl: string };
+  | { type: 'sync-cookies'; pageUrl: string }
+  | { type: 'update-check' }
+  | { type: 'update-apply' };
 
 export interface StatusReply {
   connected: boolean;
@@ -20,4 +22,13 @@ export interface ImportResult {
   product_id: number;
   duplicate: boolean;
   variants: number;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  update_available: boolean;
+  release_url: string;
+  notes: string;
+  can_apply: boolean;
 }

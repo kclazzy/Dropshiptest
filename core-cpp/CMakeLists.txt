@@ -42,6 +42,7 @@ add_library(dropship_core STATIC
   src/db/Migrations.cpp
   src/db/TaskQueue.cpp
   src/db/Bootstrap.cpp
+  src/update/Updater.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -63,6 +64,7 @@ target_include_directories(dropship_core PUBLIC src)
 target_link_libraries(dropship_core PUBLIC SQLite::SQLite3 Threads::Threads OpenSSL::Crypto
   CURL::libcurl nlohmann_json::nlohmann_json Boost::headers)
 target_compile_features(dropship_core PUBLIC cxx_std_20)
+target_compile_definitions(dropship_core PUBLIC DROPSHIP_VERSION="${PROJECT_VERSION}")
 dropship_set_warnings(dropship_core)
 
 add_executable(dropship_core_app src/app/main.cpp)
@@ -88,6 +90,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_ai_factory.cpp
     tests/test_ai_worker.cpp
     tests/test_bootstrap.cpp
+    tests/test_updater.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

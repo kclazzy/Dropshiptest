@@ -88,6 +88,10 @@ async function handle(request: PopupRequest): Promise<unknown> {
       const params = { ...request.product, ...(storeId !== null ? { store_id: storeId } : {}) };
       return (await bridge.call('IMPORT_PRODUCT_PAYLOAD', params)) as ImportResult;
     }
+    case 'update-check':
+      return (await ensureConnected()).call('UPDATE_CHECK', {}, 20_000);
+    case 'update-apply':
+      return (await ensureConnected()).call('UPDATE_APPLY', {});
     case 'sync-cookies': {
       const url = new URL(request.pageUrl);
       const cookies = await chrome.cookies.getAll({ url: url.origin });

@@ -1,5 +1,5 @@
 import type { ExtractResult } from '../shared/extract';
-import type { ImportResult, PopupReply, PopupRequest, StatusReply } from '../shared/messages';
+import type { ImportResult, PopupReply, PopupRequest, StatusReply, UpdateInfo } from '../shared/messages';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -64,6 +64,23 @@ async function syncCookies(): Promise<void> {
   say('Сессия сайта передана в ядро.');
 }
 
+async function checkUpdate(): Promise<void> {
+  const info = await send<UpdateInfo>({ type: 'update-check' });
+  $('update').hidden = !info.update_available;
+  if (!info.update_available) return;
+  $('update-text').textContent = `Доступна версия ${info.latest} (у вас ${info.current}).`;
+  const apply = $<HTMLButtonElement>('update-apply');
+  apply.hidden = !info.can_apply;
+  if (!info.can_apply) $('update-text').textContent += ' Запустите ядро через run.sh / run.cmd, чтобы обновляться кнопкой.';
+}
+
+async function applyUpdate(): Promise<void> {
+  await send({ type: 'update-apply' });
+  say('Обновляю… Ядро перезапустится само, расширение перезагрузится через минуту.');
+  // Расширение собирается в ту же папку, поэтому перезагрузка подхватывает новые файлы.
+  setTimeout(() => chrome.runtime.reload(), 60_000);
+}
+
 function guarded(action: () => Promise<void>): () => void {
   return () => {
     action()
@@ -72,6 +89,7 @@ function guarded(action: () => Promise<void>): () => void {
   };
 }
 
+$('update-apply').addEventListener('click', guarded(applyUpdate));
 $('import').addEventListener('click', guarded(importCurrentPage));
 $('cookies').addEventListener('click', guarded(syncCookies));
 $('save').addEventListener('click', guarded(async () => {
@@ -85,4 +103,4 @@ $('save').addEventListener('click', guarded(async () => {
   say('Сохранено.');
 }));
 
-refreshStatus().catch((e) => say(e instanceof Error ? e.message : String(e), true));
+refreshStatus().then(() => checkUpdate().catch(() => undefined)).catch((e) => say(e instanceof Error ? e.message : String(e), true));

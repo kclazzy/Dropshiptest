@@ -26,6 +26,7 @@ inline constexpr int kTimeout = -32002;
 inline constexpr int kUnauthorized = -32003;
 inline constexpr int kNoStore = -32010;
 inline constexpr int kStoreNotFound = -32011;
+inline constexpr int kUpdateFailed = -32020;
 }  // namespace rpc_code
 
 using RpcId = std::variant<std::int64_t, std::string>;

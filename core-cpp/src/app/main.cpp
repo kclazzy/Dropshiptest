@@ -22,6 +22,7 @@
 #include "db/Bootstrap.hpp"
 #include "db/DatabaseManager.hpp"
 #include "net/CurlTransport.hpp"
+#include "update/Updater.hpp"
 
 namespace fs = std::filesystem;
 using namespace dropship;
@@ -29,6 +30,7 @@ using namespace dropship;
 namespace {
 
 std::atomic<bool> g_stop{false};
+std::atomic<int> g_exitCode{0};
 extern "C" void onSignal(int) { g_stop = true; }
 
 void logLine(const std::string& text) {
@@ -115,6 +117,31 @@ int main(int argc, char** argv) {
     auto router = std::make_shared<bridge::RpcRouter>();
     bridge::registerCoreHandlers(*router, {**database, sessions, nowSeconds});
 
+    // Обновление: проверка по релизам GitHub; установку делает скрипт запуска (код выхода 75).
+    const Json settingsForUpdate = parseJson(readFile(dataDir / "settings.json"));
+    const std::string updateRepo = settingsForUpdate.is_object() && settingsForUpdate.contains("update") &&
+                                           settingsForUpdate["update"].value("repo", std::string{}).size() > 0
+                                       ? settingsForUpdate["update"]["repo"].get<std::string>()
+                                       : "kclazzy/Dropshiptest";
+    const bool underLauncher = std::getenv("DROPSHIP_LAUNCHER") != nullptr;
+    auto updateTransport = std::make_shared<net::CurlTransport>();
+    router->add("UPDATE_CHECK", [updateTransport, updateRepo, underLauncher](const Json&) -> Expected<Json, bridge::RpcError> {
+        const auto info = update::checkForUpdate(*updateTransport, updateRepo, DROPSHIP_VERSION);
+        if (!info) return unexpected(bridge::RpcError{bridge::rpc_code::kUpdateFailed, info.error(), nullptr});
+        return Json{{"current", info->current}, {"latest", info->latest}, {"update_available", info->updateAvailable},
+                    {"release_url", info->releaseUrl}, {"notes", info->notes}, {"can_apply", underLauncher}};
+    });
+    router->add("UPDATE_APPLY", [underLauncher](const Json&) -> Expected<Json, bridge::RpcError> {
+        if (!underLauncher) {
+            return unexpected(bridge::RpcError{bridge::rpc_code::kUpdateFailed,
+                                               "Ядро запущено без скрипта запуска (run.sh / run.cmd): обновите вручную",
+                                               nullptr});
+        }
+        g_exitCode = update::kExitCodeUpdate;
+        g_stop = true;  // ответ уйдёт до остановки: цикл ожидания спит 200 мс
+        return Json{{"restarting", true}};
+    });
+
     bridge::BridgeConfig config;
     config.port = port;
     config.authToken = *token;
@@ -147,12 +174,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    logLine("Dropship core is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
+    logLine(std::string("Dropship core ") + DROPSHIP_VERSION + " is running. Extension bridge: ws://127.0.0.1:" + std::to_string((*server)->port()) + "/ws");
     logLine("Access token file: " + (dataDir / "bridge.token").string());
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     logLine("stopping...");
     worker.reset();  // сначала воркер: он использует БД и генератор
     server->reset();
-    return 0;
+    return g_exitCode;
 }

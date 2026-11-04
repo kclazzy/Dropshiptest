@@ -9,10 +9,21 @@ core-cpp/          C++20 ядро (CMake, vcpkg)
   src/core/        Domain.hpp (Platform, TaskType, Cents), Expected.hpp
   src/pricing/     PricingEngine: цена в int64 копейках, диапазонные правила, мин. прибыль
   src/db/          DatabaseManager: SQLite WAL, миграции, история, очередь задач
-  tests/           юнит-тесты без внешних зависимостей
-extension-mv3/     расширение браузера (TypeScript, Vite) — исходники в Шаге 2
-docs/              журнал разработки и глоссарий
+  src/ai/          ИИ: Ollama (Structured Outputs) и облако (OpenAI-совместимые, Anthropic), очередь AI_REWRITE
+  src/bridge/      WebSocket-мост для расширения (JSON-RPC 2.0, токен, только loopback)
+  src/importer/    импорт товара из расширения, дедупликация по ссылке
+  src/update/      проверка обновлений (релизы GitHub)
+  src/app/         dropship_core_app — запускаемое ядро
+  tests/           юнит-тесты (177)
+extension-mv3/     расширение браузера (TypeScript, esbuild, vitest): импорт со страницы, куки, обновление
+scripts/           build.sh, run.sh/run.cmd (запуск с обновлением), update.sh/update.cmd
+docs/              USER_GUIDE.md, CLOUD.md, журнал разработки, глоссарий
+Dockerfile, docker-compose.yml   запуск ядра на сервере (не проверено в среде разработки)
 ```
+
+## Быстрый старт
+
+См. [docs/USER_GUIDE.md](docs/USER_GUIDE.md) (установка, расширение, импорт, обновление в один клик) и [docs/CLOUD.md](docs/CLOUD.md) (облачные ИИ-провайдеры, запуск на VPS).
 
 ## Сборка и тесты (ядро)
 
@@ -34,12 +45,20 @@ ctest --test-dir build --output-on-failure
 - **Очередь задач:** атомарный захват (`UPDATE … RETURNING`), приоритеты, повторы с задержкой, возврат «брошенных» задач.
 - **Валюта магазина** (`stores.currency`) — для площадок в рублях.
 
+## Что есть (Шаг 2)
+
+- **Расширение → ядро:** кнопка в popup читает JSON-LD/Open Graph со страницы (скрипт внедряется только по клику) и отправляет товар в ядро; куки поставщика — по отдельному разрешению.
+- **Мост:** `ws://127.0.0.1:8765/ws`, первый пакет — AUTH с токеном из `bridge.token`, проверка Origin (веб-страницы отклоняются), один клиент, лимит размера.
+- **ИИ:** `IContentGenerator` — Ollama или облако (openai, anthropic, openrouter, groq, together, mistral, deepseek, gemini, yandex, custom); ключи только из окружения/файла-секрета.
+- **Воркер ИИ:** задачи `AI_REWRITE` из очереди, повторы при временных ошибках, окончательный `ERROR` при неверном ключе; правки пользователя не затираются.
+- **Обновление в один клик:** `UPDATE_CHECK` / `UPDATE_APPLY`, установку делает `scripts/run.sh` (код выхода 75).
+
 ## План
 
 | Шаг | Содержание |
 |---|---|
 | 1 ✅ | База данных, PricingEngine, каркас репозитория |
-| 2 | `OllamaClient` (Structured Outputs), WebSocket-сервер для расширения, исходники расширения |
+| 2 ✅ | ИИ (Ollama + облако), WebSocket-мост, расширение, воркер ИИ, обновление, Docker |
 | 3 | Мониторинг цен/остатков (`curl_multi`, прокси, хэш состояния) |
 | 4 | Адаптеры магазинов `IStoreAdapter` (Shopify, WooCommerce, eBay, Ozon, Avito, …) |
 | 5 | Автовыкуп и трекинг через расширение |
