@@ -65,6 +65,7 @@ struct StoreOrder {
     std::string externalVariantId;
     std::int64_t quantity = 0;
     Cents totalCents = 0;
+    std::string buyerAddressJson = "{}";  // адрес доставки, если площадка его отдаёт
 };
 
 class IStoreAdapter {

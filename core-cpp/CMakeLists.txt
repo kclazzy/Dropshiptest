@@ -57,6 +57,7 @@ add_library(dropship_core STATIC
   src/app/Cli.cpp
   src/orders/Orders.cpp
   src/orders/AutoOrder.cpp
+  src/orders/Tracking.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -116,6 +117,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_cli.cpp
     tests/test_orders.cpp
     tests/test_auto_order.cpp
+    tests/test_tracking.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)
