@@ -233,10 +233,18 @@ BEGIN
 END;
 )SQL";
 
+// v4: заказы — отметка «трек передан в магазин» и время последнего опроса заказов магазина.
+constexpr std::string_view kV4Orders = R"SQL(
+ALTER TABLE orders ADD COLUMN tracking_submitted_at INTEGER;
+ALTER TABLE stores ADD COLUMN last_orders_poll_at INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_orders_status ON orders(status);
+)SQL";
+
 constexpr Migration kMigrations[] = {
     {1, kV1CoreSchema},
     {2, kV2HistoryAndEditing},
     {3, kV3StoreSync},
+    {4, kV4Orders},
 };
 
 static_assert(std::size(kMigrations) == kLatestSchemaVersion &&

@@ -37,6 +37,7 @@ endfunction()
 
 add_library(dropship_core STATIC
   src/pricing/PricingEngine.cpp
+  src/pricing/RuleRepository.cpp
   src/db/Connection.cpp
   src/db/DatabaseManager.cpp
   src/db/Migrations.cpp
@@ -54,6 +55,7 @@ add_library(dropship_core STATIC
   src/store/AvitoAdapter.cpp
   src/store/StoreSync.cpp
   src/app/Cli.cpp
+  src/orders/Orders.cpp
   src/util/Sha256.cpp
   src/net/CurlTransport.cpp
   src/importer/UrlNormalizer.cpp
@@ -111,6 +113,7 @@ if(DROPSHIP_BUILD_TESTS)
     tests/test_store_sync.cpp
     tests/test_store_registry.cpp
     tests/test_cli.cpp
+    tests/test_orders.cpp
   )
   target_link_libraries(dropship_tests PRIVATE dropship_core)
   dropship_set_warnings(dropship_tests)

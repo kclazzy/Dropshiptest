@@ -64,13 +64,14 @@ constexpr std::optional<Platform> parsePlatform(std::string_view s) noexcept {
 }
 
 // Тип задачи в task_queue (task_queue.task_type).
-enum class TaskType { AiRewrite, StorePublish, PriceSync, AutoOrder };
+enum class TaskType { AiRewrite, StorePublish, PriceSync, AutoOrder, TrackingSync };
 
-inline constexpr std::array<detail::EnumName<TaskType>, 4> kTaskTypeNames{{
+inline constexpr std::array<detail::EnumName<TaskType>, 5> kTaskTypeNames{{
     {TaskType::AiRewrite, "AI_REWRITE"},
     {TaskType::StorePublish, "STORE_PUBLISH"},
     {TaskType::PriceSync, "PRICE_SYNC"},
     {TaskType::AutoOrder, "AUTO_ORDER"},
+    {TaskType::TrackingSync, "TRACKING_SYNC"},
 }};
 
 constexpr std::string_view toString(TaskType t) noexcept {

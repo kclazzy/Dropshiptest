@@ -27,7 +27,7 @@ TEST(db_open_enables_wal_and_applies_all_migrations) {
 
     const auto mode = unwrap(db->query("PRAGMA journal_mode"));
     CHECK_EQ(mode.textAt(0, "journal_mode"), std::string("wal"));
-    CHECK_EQ(unwrap(db->schemaVersion()), 3);
+    CHECK_EQ(unwrap(db->schemaVersion()), 4);
 
     for (const char* table : {"stores", "pricing_rules", "proxies", "products", "product_variants", "orders",
                               "task_queue", "price_history", "audit_log"}) {
@@ -44,7 +44,7 @@ TEST(db_reopen_is_idempotent_and_keeps_data) {
         insertFixture(*db);
     }
     auto db = openDb(dir);
-    CHECK_EQ(unwrap(db->schemaVersion()), 3);
+    CHECK_EQ(unwrap(db->schemaVersion()), 4);
     CHECK_EQ(countRows(*db, "stores"), 1);
     CHECK_EQ(countRows(*db, "product_variants"), 1);
     CHECK_EQ(countRows(*db, "price_history"), 1);  // миграция не дублирует историю
