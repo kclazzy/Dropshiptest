@@ -64,6 +64,10 @@ target_link_libraries(dropship_core PUBLIC SQLite::SQLite3 Threads::Threads Open
 target_compile_features(dropship_core PUBLIC cxx_std_20)
 dropship_set_warnings(dropship_core)
 
+add_executable(dropship_core_app src/app/main.cpp)
+target_link_libraries(dropship_core_app PRIVATE dropship_core)
+dropship_set_warnings(dropship_core_app)
+
 if(DROPSHIP_BUILD_TESTS)
   enable_testing()
   add_executable(dropship_tests
