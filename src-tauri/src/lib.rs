@@ -6,6 +6,7 @@ pub mod error;
 pub mod pricing;
 pub mod security;
 pub mod settings;
+pub mod stores;
 #[cfg(test)]
 pub mod testutil;
 
