@@ -1,6 +1,7 @@
 // Service worker: держит соединение с локальным ядром и выполняет команды popup и ядра.
 // Состояние (токен, магазин) хранится в chrome.storage.local — воркер MV3 может выгружаться в любой момент.
 import { BridgeClient } from '../shared/bridge';
+import { handleAutoOrder } from '../shared/orders';
 import type { ImportResult, PopupReply, PopupRequest, StatusReply } from '../shared/messages';
 
 const CORE_URL = 'ws://127.0.0.1:8765/ws';
@@ -43,7 +44,7 @@ async function ensureConnected(): Promise<BridgeClient> {
   return connecting;
 }
 
-function handleCoreRequest(method: string): unknown {
+function handleCoreRequest(method: string, params?: unknown): unknown {
   switch (method) {
     case 'PING':
       return { pong: true };
@@ -51,6 +52,14 @@ function handleCoreRequest(method: string): unknown {
       // Ответ успевает уйти раньше перезагрузки.
       setTimeout(() => chrome.runtime.reload(), 200);
       return { reloading: true };
+    case 'EXECUTE_AUTO_ORDER':
+      return handleAutoOrder(params, {
+        openTab: async (url) => void (await chrome.tabs.create({ url, active: false })),
+        notify: async () => {
+          await chrome.action.setBadgeBackgroundColor({ color: '#d93025' });
+          await chrome.action.setBadgeText({ text: '!' });
+        },
+      });
     default:
       throw Object.assign(new Error('method not found'), { code: -32601 });
   }
@@ -88,6 +97,23 @@ async function handle(request: PopupRequest): Promise<unknown> {
       const params = { ...request.product, ...(storeId !== null ? { store_id: storeId } : {}) };
       return (await bridge.call('IMPORT_PRODUCT_PAYLOAD', params)) as ImportResult;
     }
+    case 'orders-list':
+      return (await ensureConnected()).call('LIST_ORDERS', {});
+    case 'order-result': {
+      const bridge = await ensureConnected();
+      return bridge.call('ORDER_FULFILLMENT_RESULT', {
+        order_id: request.orderId,
+        status: request.status,
+        supplier_order_id: request.supplierOrderId ?? '',
+        message: request.message ?? '',
+      });
+    }
+    case 'order-track':
+      return (await ensureConnected()).call('ORDER_TRACKING_UPDATE', {
+        order_id: request.orderId,
+        tracking_number: request.trackingNumber,
+        carrier: request.carrier ?? '',
+      });
     case 'update-check':
       return (await ensureConnected()).call('UPDATE_CHECK', {}, 20_000);
     case 'update-apply':

@@ -1,4 +1,5 @@
 import type { ExtractResult } from '../shared/extract';
+import { addressLines, needsAction, type OrderRow } from '../shared/orders';
 import type { ImportResult, PopupReply, PopupRequest, StatusReply, UpdateInfo } from '../shared/messages';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -81,14 +82,97 @@ async function applyUpdate(): Promise<void> {
   setTimeout(() => chrome.runtime.reload(), 60_000);
 }
 
+const STATUS_TEXT: Record<string, string> = {
+  NEW: 'Ожидает отправки',
+  QUEUED_FOR_EXT: 'Нужно выкупить у поставщика',
+  ORDERED: 'Выкуплен — укажите трек',
+  SHIPPED: 'Трек передан',
+  MANUAL_REVIEW: 'Требует вашего решения',
+  ERROR: 'Ошибка выкупа',
+};
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = ''): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.textContent = text; // только textContent: данные заказа приходят извне
+  if (className) node.className = className;
+  return node;
+}
+
+function actionRow(placeholder: string, button: string, onClick: (value: string) => Promise<void>): HTMLElement {
+  const row = el('div', '', 'row');
+  const input = el('input');
+  input.placeholder = placeholder;
+  const go = el('button', button);
+  go.addEventListener('click', guarded(() => onClick(input.value.trim())));
+  row.append(input, go);
+  return row;
+}
+
+function renderOrder(order: OrderRow): HTMLElement {
+  const card = el('div', '', 'order');
+  card.append(el('div', `№${order.external_order_id} · ${order.title ?? 'товар не привязан'} × ${order.quantity}`));
+  card.append(el('div', STATUS_TEXT[order.status] ?? order.status, 'st'));
+  if (order.error_message) card.append(el('div', order.error_message, 'note'));
+  const address = addressLines(order.address);
+  if (address && ['QUEUED_FOR_EXT', 'MANUAL_REVIEW', 'ERROR', 'NEW'].includes(order.status)) {
+    card.append(el('pre', address));
+    const row = el('div', '', 'row');
+    const copy = el('button', 'Скопировать адрес');
+    copy.addEventListener('click', () => void navigator.clipboard.writeText(address).then(() => say('Адрес скопирован.')));
+    row.append(copy);
+    if (order.supplier_url && /^https?:/.test(order.supplier_url)) {
+      const open = el('button', `Открыть поставщика (арт. ${order.sku ?? '?'})`);
+      open.addEventListener('click', () => void chrome.tabs.create({ url: order.supplier_url! }));
+      row.append(open);
+    }
+    card.append(row);
+  }
+  if (['QUEUED_FOR_EXT', 'MANUAL_REVIEW', 'ERROR', 'NEW'].includes(order.status)) {
+    card.append(actionRow('№ заказа у поставщика', 'Выкуплено', async (value) => {
+      if (!value) throw new Error('Введите номер заказа у поставщика');
+      await send({ type: 'order-result', orderId: order.id, status: 'ordered', supplierOrderId: value });
+      say('Заказ отмечен как выкупленный.');
+    }));
+    if (order.status === 'QUEUED_FOR_EXT') {
+      const fail = el('button', 'Не удалось выкупить');
+      fail.addEventListener('click', guarded(async () => {
+        await send({ type: 'order-result', orderId: order.id, status: 'failed', message: 'Отмечено вручную: выкуп не удался' });
+        say('Заказ отмечен как неудавшийся.');
+      }));
+      card.append(fail);
+    }
+  }
+  if (['ORDERED', 'SHIPPED'].includes(order.status)) {
+    card.append(actionRow(order.tracking_number ?? 'Трек-номер', 'Отправить трек', async (value) => {
+      if (!value) throw new Error('Введите трек-номер');
+      await send({ type: 'order-track', orderId: order.id, trackingNumber: value });
+      say('Трек сохранён, ядро передаст его в магазин.');
+    }));
+  }
+  return card;
+}
+
+async function loadOrders(): Promise<void> {
+  const reply = await send<{ orders: OrderRow[] }>({ type: 'orders-list' });
+  const box = $('orders');
+  box.replaceChildren();
+  const active = reply.orders.filter((o) => needsAction(o));
+  if (active.length === 0) box.append(el('div', 'Заказов, требующих действий, нет.'));
+  for (const order of active) box.append(renderOrder(order));
+  const waiting = reply.orders.filter((o) => o.status === 'QUEUED_FOR_EXT').length;
+  await chrome.action.setBadgeText({ text: waiting > 0 ? String(waiting) : '' });
+}
+
 function guarded(action: () => Promise<void>): () => void {
   return () => {
     action()
       .then(refreshStatus)
+      .then(() => loadOrders().catch(() => undefined))
       .catch((e) => say(e instanceof Error ? e.message : String(e), true));
   };
 }
 
+$('orders-refresh').addEventListener('click', guarded(loadOrders));
 $('update-apply').addEventListener('click', guarded(applyUpdate));
 $('import').addEventListener('click', guarded(importCurrentPage));
 $('cookies').addEventListener('click', guarded(syncCookies));
@@ -103,4 +187,4 @@ $('save').addEventListener('click', guarded(async () => {
   say('Сохранено.');
 }));
 
-refreshStatus().then(() => checkUpdate().catch(() => undefined)).catch((e) => say(e instanceof Error ? e.message : String(e), true));
+refreshStatus().then(() => loadOrders().catch(() => undefined)).then(() => checkUpdate().catch(() => undefined)).catch((e) => say(e instanceof Error ? e.message : String(e), true));

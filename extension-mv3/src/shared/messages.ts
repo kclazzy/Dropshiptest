@@ -7,7 +7,10 @@ export type PopupRequest =
   | { type: 'import'; product: ProductPayload }
   | { type: 'sync-cookies'; pageUrl: string }
   | { type: 'update-check' }
-  | { type: 'update-apply' };
+  | { type: 'update-apply' }
+  | { type: 'orders-list' }
+  | { type: 'order-result'; orderId: number; status: 'ordered' | 'failed' | 'needs_manual'; supplierOrderId?: string; message?: string }
+  | { type: 'order-track'; orderId: number; trackingNumber: string; carrier?: string };
 
 export interface StatusReply {
   connected: boolean;
