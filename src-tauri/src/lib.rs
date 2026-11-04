@@ -9,6 +9,7 @@ pub mod import;
 pub mod monitor;
 pub mod pricing;
 pub mod security;
+pub mod services;
 pub mod settings;
 pub mod stores;
 pub mod sync;
@@ -25,6 +26,9 @@ use crate::pricing::{PriceBreakdown, PriceInput, PricingRule, RuleSpec};
 /// Состояние приложения, доступное командам интерфейса.
 pub struct AppState {
     pub pool: SqlitePool,
+    pub vault: std::sync::Arc<security::CredentialVault>,
+    pub bridge: std::sync::Arc<bridge::BridgeState>,
+    pub shutdown: tokio_util::sync::CancellationToken,
 }
 
 /// Параметры визуального калькулятора прибыли (суммы в копейках, проценты как на ползунках).
@@ -80,7 +84,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let data_dir = app.path().app_data_dir()?;
             let pool = tauri::async_runtime::block_on(db::init_pool(&data_dir.join("dropship.db")))?;
             tracing::info!("database ready in {}", data_dir.display());
-            app.manage(AppState { pool });
+            let vault = std::sync::Arc::new(security::CredentialVault::open_or_create(&data_dir.join("secret.key"))?);
+            let shutdown = tokio_util::sync::CancellationToken::new();
+            let bridge = tauri::async_runtime::block_on(services::start(pool.clone(), vault.clone(), shutdown.clone()));
+            app.manage(AppState { pool, vault, bridge, shutdown });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![price_breakdown])

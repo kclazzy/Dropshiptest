@@ -18,10 +18,14 @@ struct Harness {
 }
 
 async fn start() -> Harness {
+    start_on("127.0.0.1:0").await
+}
+
+async fn start_on(bind: &str) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let pool = crate::db::init_pool(&dir.path().join("b.db")).await.unwrap();
     let state = BridgeState::new(pool, None);
-    let listener = bind_loopback("127.0.0.1:0").await.unwrap();
+    let listener = bind_loopback(bind).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let cancel = CancellationToken::new();
     tokio::spawn(serve(listener, state.clone(), cancel.clone()));
@@ -148,4 +152,16 @@ async fn bridge_refuses_non_loopback_addresses() {
     assert!(bind_loopback("0.0.0.0:0").await.is_err());
     assert!(bind_loopback("192.168.1.5:8765").await.is_err());
     assert!(bind_loopback("garbage").await.is_err());
+}
+
+/// Ручная сквозная проверка с настоящим клиентом расширения (Node): `E2E_PORT=… E2E_CODE_FILE=… cargo test -- --ignored`.
+#[tokio::test]
+#[ignore]
+async fn serve_for_extension_e2e() {
+    let (Ok(port), Ok(code_file)) = (std::env::var("E2E_PORT"), std::env::var("E2E_CODE_FILE")) else { return };
+    let h = start_on(&format!("127.0.0.1:{port}")).await;
+    std::fs::write(code_file, h.state.pairing.start(now_secs())).unwrap();
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    let products: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM products").fetch_one(&h.state.pool).await.unwrap();
+    assert_eq!(products, 1, "расширение должно было импортировать ровно один товар");
 }
