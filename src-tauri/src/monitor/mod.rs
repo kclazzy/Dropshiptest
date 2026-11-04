@@ -9,7 +9,8 @@ pub mod parse;
 use serde_json::json;
 use sqlx::SqlitePool;
 
-use crate::catalog::{self, apply_variant_state};
+use crate::catalog;
+use crate::failover;
 use crate::db::{self, TaskType};
 use crate::error::AppResult;
 use fetch::{FetchError, PageFetcher};
@@ -162,7 +163,7 @@ async fn apply_page(pool: &SqlitePool, task_id: i64, product_id: i64, store_id: 
     let mut changed = 0;
     for (variant_id, offer) in matched {
         let shipping: i64 = sqlx::query_scalar("SELECT shipping_price_minor FROM product_variants WHERE id = ?").bind(variant_id).fetch_one(&mut *tx).await?;
-        let applied = apply_variant_state(&mut tx, rules.as_ref(), variant_id, offer.price_minor, shipping, offer.stock, now).await?;
+        let applied = failover::apply_observed(&mut tx, rules.as_ref(), variant_id, offer.price_minor, shipping, offer.stock, now).await?;
         if !matches!(applied, catalog::ApplyOutcome::Unchanged) {
             changed += 1;
         }
@@ -178,10 +179,50 @@ async fn mark_gone(pool: &SqlitePool, product_id: i64, store_id: i64, now: i64) 
     let rules = catalog::load_rule_set(&mut tx, store_id).await?;
     let variants: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT id, supplier_price_minor, shipping_price_minor FROM product_variants WHERE product_id = ?").bind(product_id).fetch_all(&mut *tx).await?;
     for (id, price, shipping) in variants {
-        apply_variant_state(&mut tx, rules.as_ref(), id, price, shipping, 0, now).await?;
+        failover::apply_observed(&mut tx, rules.as_ref(), id, price, shipping, 0, now).await?;
     }
-    sqlx::query("UPDATE products SET monitor_status = 'ARCHIVED', last_checked_at = ? WHERE id = ?").bind(now).bind(product_id).execute(&mut *tx).await?;
+    // Если витрину удерживает резервный поставщик — товар остаётся под наблюдением.
+    let alive: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM product_variants WHERE product_id = ? AND is_in_stock = 1").bind(product_id).fetch_one(&mut *tx).await?;
+    let status = if alive > 0 { "ACTIVE" } else { "ARCHIVED" };
+    sqlx::query("UPDATE products SET monitor_status = ?, last_checked_at = ? WHERE id = ?").bind(status).bind(now).bind(product_id).execute(&mut *tx).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+const BACKUP_INTERVAL_SECS: i64 = 1_800;
+
+/// Проверка страниц резервных поставщиков (приоритет 2–3). Возвращает число обработанных.
+/// Сбой сети или блокировка ничего не меняют (кроме отметки времени, чтобы не долбить сайт); 404/410 — поставщик недоступен.
+pub async fn check_backups(pool: &SqlitePool, fetcher: &dyn PageFetcher, vault: Option<&crate::security::CredentialVault>, now: i64, limit: i64) -> AppResult<usize> {
+    let due: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, supplier_url, supplier_sku FROM variant_suppliers WHERE priority > 1 AND last_checked_at + ? <= ? ORDER BY last_checked_at LIMIT ?",
+    )
+    .bind(BACKUP_INTERVAL_SECS)
+    .bind(now)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    for (id, url, sku) in &due {
+        let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default();
+        let cookies = cookies_for(pool, &host, vault).await;
+        match fetcher.fetch(url, cookies.as_deref(), None).await {
+            Ok(page) if matches!(page.status, 404 | 410) => failover::record_backup_observation(pool, *id, None, Some(0), false, now).await?,
+            Ok(page) if page.status == 200 => {
+                let offers = parse::parse_offers(&page.body);
+                let offer = offers.iter().find(|o| o.sku.as_deref() == Some(sku.as_str())).or(if offers.len() == 1 { offers.first() } else { None });
+                match offer {
+                    Some(o) => failover::record_backup_observation(pool, *id, Some(o.price_minor), Some(o.stock), true, now).await?,
+                    None => touch_backup(pool, *id, now).await?,
+                }
+            }
+            _ => touch_backup(pool, *id, now).await?,
+        }
+    }
+    Ok(due.len())
+}
+
+async fn touch_backup(pool: &SqlitePool, id: i64, now: i64) -> AppResult<()> {
+    sqlx::query("UPDATE variant_suppliers SET last_checked_at = ? WHERE id = ?").bind(now).bind(id).execute(pool).await?;
     Ok(())
 }
 

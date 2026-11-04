@@ -126,6 +126,7 @@ pub async fn monitor_tick(pool: &SqlitePool, vault: &CredentialVault, fetcher: &
             _ => report.processed += 1,
         }
     }
+    report.processed += monitor::check_backups(pool, fetcher, Some(vault), now, MAX_TASKS_PER_TICK as i64).await?;
     let stores: Vec<Store> = sqlx::query_as("SELECT * FROM stores WHERE is_active = 1 AND platform_type <> 'local'").fetch_all(pool).await?;
     for store in stores {
         match stores::build_adapter(&store, vault) {

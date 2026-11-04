@@ -189,3 +189,40 @@ async fn cookies_and_proxy_are_passed_to_the_fetcher_and_cookies_are_encrypted_a
     let seen = fetcher.seen.lock().unwrap();
     assert_eq!(seen[0], ("https://supplier.example/item".into(), Some("sid=abc".into()), Some("http://proxy.example:3128".into())));
 }
+
+#[tokio::test]
+async fn primary_page_with_zero_stock_hands_the_showcase_to_the_backup() {
+    let (_d, pool, product, variant) = setup().await;
+    failover::upsert_backup(&pool, variant, &failover::NewSupplier { priority: 2, url: "https://backup.example/x", sku: "B", price_minor: 12_000, shipping_minor: 0, stock: 40 }, 5).await.unwrap();
+    schedule_due(&pool, 10).await.unwrap();
+    let out = process_next_price_sync(&pool, &FakeFetcher::page(200, &ld("100", "OutOfStock")), None, 20).await.unwrap();
+    assert!(matches!(out, SyncOutcome::Updated { .. }));
+    let (price, stock, in_stock): (i64, i64, bool) = sqlx::query_as("SELECT supplier_price_minor, supplier_stock, is_in_stock FROM product_variants WHERE id = ?").bind(variant).fetch_one(&pool).await.unwrap();
+    assert_eq!((price, stock, in_stock), (12_000, 40, true));
+    // страницу основного сняли — товар остаётся под наблюдением, пока держит резервный
+    sqlx::query("UPDATE products SET next_check_at = 0").execute(&pool).await.unwrap();
+    schedule_due(&pool, 30).await.unwrap();
+    process_next_price_sync(&pool, &FakeFetcher::page(404, ""), None, 40).await.unwrap();
+    let status: String = sqlx::query_scalar("SELECT monitor_status FROM products WHERE id = ?").bind(product).fetch_one(&pool).await.unwrap();
+    assert_eq!(status, "ACTIVE");
+}
+
+#[tokio::test]
+async fn backup_pages_are_checked_on_their_own_schedule() {
+    let (_d, pool, _p, variant) = setup().await;
+    failover::upsert_backup(&pool, variant, &failover::NewSupplier { priority: 2, url: "https://backup.example/x", sku: "B", price_minor: 12_000, shipping_minor: 0, stock: 40 }, 100).await.unwrap();
+    let fetcher = FakeFetcher::page(200, &ld("90", "InStock"));
+    assert_eq!(check_backups(&pool, &fetcher, None, 200, 10).await.unwrap(), 0, "ещё не пора");
+    assert_eq!(check_backups(&pool, &fetcher, None, 100 + BACKUP_INTERVAL_SECS, 10).await.unwrap(), 1);
+    let price: i64 = sqlx::query_scalar("SELECT supplier_price_minor FROM variant_suppliers WHERE priority = 2").fetch_one(&pool).await.unwrap();
+    assert_eq!(price, 9_000);
+    // блокировка не меняет данные, но откладывает следующую проверку
+    let later = 100 + 2 * BACKUP_INTERVAL_SECS;
+    check_backups(&pool, &FakeFetcher::page(429, ""), None, later, 10).await.unwrap();
+    let (price, checked): (i64, i64) = sqlx::query_as("SELECT supplier_price_minor, last_checked_at FROM variant_suppliers WHERE priority = 2").fetch_one(&pool).await.unwrap();
+    assert_eq!((price, checked), (9_000, later));
+    // 404 — поставщик недоступен
+    check_backups(&pool, &FakeFetcher::page(404, ""), None, later + BACKUP_INTERVAL_SECS, 10).await.unwrap();
+    let available: bool = sqlx::query_scalar("SELECT is_available FROM variant_suppliers WHERE priority = 2").fetch_one(&pool).await.unwrap();
+    assert!(!available);
+}

@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod commands;
 pub mod db;
 pub mod error;
+pub mod failover;
 pub mod import;
 pub mod monitor;
 pub mod orders;
