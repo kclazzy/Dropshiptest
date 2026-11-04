@@ -369,5 +369,49 @@ pub async fn list_orders(pool: &SqlitePool, limit: i64) -> AppResult<Vec<Order>>
     Ok(sqlx::query_as("SELECT * FROM orders ORDER BY id DESC LIMIT ?").bind(limit.clamp(1, 500)).fetch_all(pool).await?)
 }
 
+const POLL_EVERY_SECS: i64 = 300;
+const FIRST_LOOKBACK_SECS: i64 = 7 * 86_400;
+const OVERLAP_SECS: i64 = 3_600;
+
+/// Забирает новые заказы магазина не чаще раза в 5 минут. Повторы отсекаются по номеру заказа.
+/// Площадка без поддержки — не ошибка (`Ok(None)`); сбой обмена записывается в `stores.last_error`.
+pub async fn poll_orders(pool: &SqlitePool, store_id: i64, adapter: &dyn StoreAdapter, now: i64) -> AppResult<Option<IngestReport>> {
+    let key = format!("orders_since:{store_id}");
+    let polled_key = format!("orders_polled_at:{store_id}");
+    let last_poll = crate::settings::get(pool, &polled_key).await?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    if now - last_poll < POLL_EVERY_SECS {
+        return Ok(None);
+    }
+    let since = crate::settings::get(pool, &key).await?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(now - FIRST_LOOKBACK_SECS);
+    match adapter.fetch_new_orders(since).await {
+        Ok(found) => {
+            // Некорректный заказ площадки не должен блокировать остальные.
+            let mut report = IngestReport::default();
+            for order in &found {
+                match ingest_orders(pool, store_id, std::slice::from_ref(order), now).await {
+                    Ok(r) => {
+                        report.created += r.created;
+                        report.duplicates += r.duplicates;
+                    }
+                    Err(e) => tracing::warn!(error = %e, order = %order.external_order_id, "заказ площадки пропущен"),
+                }
+            }
+            crate::settings::set(pool, &key, &(now - OVERLAP_SECS).to_string(), now).await?;
+            crate::settings::set(pool, &polled_key, &now.to_string(), now).await?;
+            sqlx::query("UPDATE stores SET last_error = NULL WHERE id = ?").bind(store_id).execute(pool).await?;
+            Ok(Some(report))
+        }
+        Err(e) if e.kind == StoreErrorKind::Unsupported => {
+            crate::settings::set(pool, &polled_key, &now.to_string(), now).await?;
+            Ok(None)
+        }
+        Err(e) => {
+            crate::settings::set(pool, &polled_key, &now.to_string(), now).await?;
+            sqlx::query("UPDATE stores SET last_error = ? WHERE id = ?").bind(e.to_user_friendly_ru()).bind(store_id).execute(pool).await?;
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

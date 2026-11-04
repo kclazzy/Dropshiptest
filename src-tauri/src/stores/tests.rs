@@ -173,12 +173,46 @@ async fn avito_bad_credentials_and_bad_items() {
 }
 
 #[tokio::test]
-async fn orders_and_tracking_are_reported_as_unsupported() {
+async fn avito_orders_and_tracking_are_reported_as_unsupported() {
     let server = MockServer::start().await;
-    let adapter = ozon(&server);
+    let adapter = avito(&server);
     assert_eq!(adapter.fetch_new_orders(0).await.unwrap_err().kind, StoreErrorKind::Unsupported);
     assert_eq!(adapter.submit_tracking("1", "2").await.unwrap_err().kind, StoreErrorKind::Unsupported);
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn iso_dates_are_correct() {
+    assert_eq!(ozon::iso_utc(0), "1970-01-01T00:00:00Z");
+    assert_eq!(ozon::iso_utc(951_782_400 + 3_661), "2000-02-29T01:01:01Z");
+    assert_eq!(ozon::iso_utc(1_793_793_600), "2026-11-04T12:00:00Z");
+}
+
+#[tokio::test]
+async fn ozon_postings_become_orders_with_pagination() {
+    let server = MockServer::start().await;
+    server.reply("/v3/posting/fbs/list", 200, r#"{"result":{"has_next":true,"postings":[{"posting_number":"111-1","products":[{"offer_id":"A","quantity":2,"price":"1500.50"}],"addressee":{"name":"Иван","phone":"+7"},"analytics_data":{"city":"Москва"},"customer":{"address":{"address_tail":"Тверская 1"}}}]}}"#);
+    server.reply("/v3/posting/fbs/list", 200, r#"{"result":{"has_next":false,"postings":[{"posting_number":"222-1","products":[{"offer_id":"B","quantity":1,"price":"100"},{"offer_id":"C","quantity":3,"price":"10"}]}]}}"#);
+    let orders = ozon(&server).fetch_new_orders(1_793_793_600).await.unwrap();
+    assert_eq!(orders.iter().map(|o| (o.external_order_id.as_str(), o.external_variant_id.as_str(), o.quantity, o.total_minor)).collect::<Vec<_>>(),
+        vec![("111-1", "A", 2, 300_100), ("222-1#1", "B", 1, 10_000), ("222-1#2", "C", 3, 3_000)]);
+    assert!(orders[0].buyer_address_json.contains("Москва"));
+    let reqs = server.requests_to("/v3/posting/fbs/list");
+    assert_eq!((reqs.len(), reqs[1].json()["offset"].as_i64()), (2, Some(100)));
+    assert_eq!(reqs[0].json()["filter"]["since"], "2026-11-04T12:00:00Z");
+}
+
+#[tokio::test]
+async fn ozon_tracking_accepts_success_and_reports_rejection() {
+    let server = MockServer::start().await;
+    server.reply("/v2/fbs/posting/tracking-number/set", 200, r#"{"result":[{"posting_number":"222-1","result":true,"error":""}]}"#);
+    ozon(&server).submit_tracking("222-1#2", "TRK1").await.unwrap();
+    assert_eq!(server.requests_to("/v2/fbs/posting/tracking-number/set")[0].json()["tracking_numbers"][0]["posting_number"], "222-1");
+    let bad = MockServer::start().await;
+    bad.reply("/v2/fbs/posting/tracking-number/set", 200, r#"{"result":[{"posting_number":"1","result":false,"error":"wrong status"}]}"#);
+    let err = ozon(&bad).submit_tracking("1", "T").await.unwrap_err();
+    assert_eq!(err.kind, StoreErrorKind::Rejected);
+    assert!(err.message.contains("wrong status"));
 }
 
 #[test]

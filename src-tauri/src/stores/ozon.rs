@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::{
     classify, http_client, join, limiter, rubles_ceil, ItemResult, StoreAdapter, StoreError, StoreErrorKind, StoreResult,
-    VariantUpdate,
+    StoreOrder, VariantUpdate,
 };
 
 /// Лимит Ozon на размер одного запроса.
@@ -80,10 +80,88 @@ fn parse_result(response: &Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// Unix-секунды -> «2026-11-04T12:00:00Z» (без внешних крейтов; алгоритм civil-from-days).
+pub(crate) fn iso_utc(unix: i64) -> String {
+    let days = unix.div_euclid(86_400);
+    let secs = unix.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", secs / 3_600, secs % 3_600 / 60, secs % 60)
+}
+
+/// Отправления Ozon -> наши заказы: по строке на каждый товар отправления.
+fn parse_postings(response: &Value) -> Vec<StoreOrder> {
+    let Some(postings) = response.pointer("/result/postings").and_then(Value::as_array) else { return Vec::new() };
+    let mut orders = Vec::new();
+    for posting in postings {
+        let Some(number) = posting.get("posting_number").and_then(Value::as_str) else { continue };
+        let products = posting.get("products").and_then(Value::as_array).cloned().unwrap_or_default();
+        let multi = products.len() > 1;
+        let address = json!({
+            "name": posting.pointer("/addressee/name"),
+            "phone": posting.pointer("/addressee/phone"),
+            "city": posting.pointer("/analytics_data/city"),
+            "street": posting.pointer("/customer/address/address_tail"),
+        });
+        for (i, product) in products.iter().enumerate() {
+            let (Some(offer), Some(quantity)) = (product.get("offer_id").and_then(Value::as_str), product.get("quantity").and_then(Value::as_i64)) else { continue };
+            let unit = product.get("price").and_then(Value::as_str).and_then(crate::monitor::parse::parse_price_minor).unwrap_or(0);
+            orders.push(StoreOrder {
+                external_order_id: if multi { format!("{number}#{}", i + 1) } else { number.to_string() },
+                external_variant_id: offer.to_string(),
+                quantity,
+                total_minor: unit.saturating_mul(quantity),
+                buyer_address_json: address.to_string(),
+            });
+        }
+    }
+    orders
+}
+
 #[async_trait::async_trait]
 impl StoreAdapter for OzonAdapter {
     fn name(&self) -> String {
         "ozon".into()
+    }
+
+    /// ⚠ По памяти: POST /v3/posting/fbs/list, фильтр по дате и статусу «ожидает сборки».
+    async fn fetch_new_orders(&self, since: i64) -> StoreResult<Vec<StoreOrder>> {
+        let mut orders = Vec::new();
+        let mut offset = 0;
+        for _ in 0..20 {
+            let body = json!({
+                "dir": "ASC",
+                "filter": { "since": iso_utc(since.max(0)), "to": iso_utc(since.max(0) + 90 * 86_400), "status": "awaiting_packaging" },
+                "limit": 100, "offset": offset, "with": { "analytics_data": true }
+            });
+            let response = self.post("/v3/posting/fbs/list", &body).await?;
+            orders.extend(parse_postings(&response));
+            if response.pointer("/result/has_next").and_then(Value::as_bool) != Some(true) {
+                break;
+            }
+            offset += 100;
+        }
+        Ok(orders)
+    }
+
+    /// ⚠ По памяти: POST /v2/fbs/posting/tracking-number/set.
+    async fn submit_tracking(&self, external_order_id: &str, tracking_number: &str) -> StoreResult<()> {
+        let posting = external_order_id.split('#').next().unwrap_or(external_order_id);
+        let body = json!({ "tracking_numbers": [{ "posting_number": posting, "tracking_number": tracking_number }] });
+        let response = self.post("/v2/fbs/posting/tracking-number/set", &body).await?;
+        let row = response.get("result").and_then(Value::as_array).and_then(|r| r.first());
+        match row {
+            Some(r) if r.get("result").and_then(Value::as_bool) == Some(true) => Ok(()),
+            Some(r) => Err(StoreError::new(StoreErrorKind::Rejected, format!("Ozon не принял трек-номер: {}", r.get("error").and_then(Value::as_str).unwrap_or("причина не указана")))),
+            None => Err(StoreError::new(StoreErrorKind::Transport, "Ozon не вернул результат по треку")),
+        }
     }
 
     async fn update_variants(&self, updates: &[VariantUpdate]) -> StoreResult<Vec<ItemResult>> {

@@ -151,6 +151,12 @@ pub async fn orders_tick(pool: &SqlitePool, vault: &CredentialVault, notifier: &
             orders::HandoffOutcome::Stale { .. } => {}
         }
     }
+    let active: Vec<Store> = sqlx::query_as("SELECT * FROM stores WHERE is_active = 1 AND platform_type <> 'local'").fetch_all(pool).await?;
+    for store in active {
+        if let Ok(adapter) = stores::build_adapter(&store, vault) {
+            orders::poll_orders(pool, store.id, adapter.as_ref(), now).await?;
+        }
+    }
     let waiting: Vec<(i64, i64)> = sqlx::query_as("SELECT id, store_id FROM orders WHERE status = 'SHIPPED' AND tracking_sent_at IS NULL AND tracking_number IS NOT NULL LIMIT 100").fetch_all(pool).await?;
     for (order_id, store_id) in waiting {
         let store: Option<Store> = sqlx::query_as("SELECT * FROM stores WHERE id = ? AND is_active = 1 AND platform_type <> 'local'").bind(store_id).fetch_optional(pool).await?;

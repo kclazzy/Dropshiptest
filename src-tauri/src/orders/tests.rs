@@ -242,3 +242,47 @@ async fn tracking_is_pushed_to_the_store_or_left_as_manual_hint() {
     let sent: Option<i64> = sqlx::query_scalar("SELECT tracking_sent_at FROM orders WHERE id = 1").fetch_one(&pool).await.unwrap();
     assert_eq!(sent, Some(16));
 }
+
+struct Feed(Mutex<Vec<i64>>, Result<Vec<StoreOrder>, StoreErrorKind>);
+
+#[async_trait]
+impl StoreAdapter for Feed {
+    fn name(&self) -> String {
+        "F".into()
+    }
+    async fn update_variants(&self, _u: &[VariantUpdate]) -> StoreResult<Vec<ItemResult>> {
+        Ok(vec![])
+    }
+    async fn fetch_new_orders(&self, since: i64) -> StoreResult<Vec<StoreOrder>> {
+        self.0.lock().unwrap().push(since);
+        self.1.clone().map_err(|k| StoreError::new(k, "x"))
+    }
+}
+
+#[tokio::test]
+async fn polling_ingests_once_throttles_and_moves_the_cursor() {
+    let (_d, pool, store, _v) = setup().await;
+    let mut broken = order("BAD", 100, 1);
+    broken.quantity = 0; // некорректный заказ не мешает остальным
+    let feed = Feed(Mutex::new(vec![]), Ok(vec![broken, order("P-1", 200_000, 1)]));
+    let first = poll_orders(&pool, store, &feed, 1_000_000).await.unwrap().unwrap();
+    assert_eq!((first.created, first.duplicates), (1, 0));
+    assert_eq!(poll_orders(&pool, store, &feed, 1_000_100).await.unwrap(), None, "рано: опрос не чаще 5 минут");
+    let again = poll_orders(&pool, store, &feed, 1_000_400).await.unwrap().unwrap();
+    assert_eq!((again.created, again.duplicates), (0, 1));
+    assert_eq!(*feed.0.lock().unwrap(), vec![1_000_000 - 7 * 86_400, 1_000_000 - 3_600], "курсор сдвинут с запасом");
+}
+
+#[tokio::test]
+async fn polling_failures_go_to_store_error_and_unsupported_is_silent() {
+    let (_d, pool, store, _v) = setup().await;
+    let down = Feed(Mutex::new(vec![]), Err(StoreErrorKind::Auth));
+    assert_eq!(poll_orders(&pool, store, &down, 10_000).await.unwrap(), None);
+    let err: Option<String> = sqlx::query_scalar("SELECT last_error FROM stores WHERE id = ?").bind(store).fetch_one(&pool).await.unwrap();
+    assert!(err.is_some());
+    let unsupported = Feed(Mutex::new(vec![]), Err(StoreErrorKind::Unsupported));
+    sqlx::query("UPDATE stores SET last_error = NULL").execute(&pool).await.unwrap();
+    assert_eq!(poll_orders(&pool, store, &unsupported, 20_000).await.unwrap(), None);
+    let err: Option<String> = sqlx::query_scalar("SELECT last_error FROM stores WHERE id = ?").bind(store).fetch_one(&pool).await.unwrap();
+    assert_eq!(err, None);
+}
