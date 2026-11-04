@@ -114,20 +114,27 @@ pub async fn dequeue_next_task_of(
     }
     fail.execute(pool).await?;
 
-    let take_sql = format!(
-        "UPDATE task_queue SET status = 'IN_PROGRESS', attempts = attempts + 1, locked_at = ?1 \
-         WHERE id = ( \
-             SELECT id FROM task_queue \
-             WHERE ((status = 'PENDING' AND scheduled_at <= ?1) \
-                OR (status = 'IN_PROGRESS' AND locked_at <= ?2 AND attempts < max_attempts)){type_clause} \
-             ORDER BY priority ASC, scheduled_at ASC, id ASC LIMIT 1) \
-         RETURNING *"
-    );
-    let mut take = sqlx::query_as::<_, Task>(&take_sql).bind(now).bind(lock_expired_before);
-    for t in types {
-        take = take.bind(*t);
+    // Два запроса вместо одного с OR: с OR SQLite не может читать индекс по порядку и сортирует всю очередь
+    // (на 11 000 ожидающих задач — 2,2 мс против ~0,1 мс; профиль, шаг 8). Сначала готовые, потом зависшие.
+    let ready = "status = 'PENDING' AND scheduled_at <= ?1";
+    let stale = "status = 'IN_PROGRESS' AND locked_at <= ?2 AND attempts < max_attempts";
+    for condition in [ready, stale] {
+        let take_sql = format!(
+            "UPDATE task_queue SET status = 'IN_PROGRESS', attempts = attempts + 1, locked_at = ?1 \
+             WHERE id = ( \
+                 SELECT id FROM task_queue WHERE {condition}{type_clause} \
+                 ORDER BY priority ASC, scheduled_at ASC, id ASC LIMIT 1) \
+             RETURNING *"
+        );
+        let mut take = sqlx::query_as::<_, Task>(&take_sql).bind(now).bind(lock_expired_before);
+        for t in types {
+            take = take.bind(*t);
+        }
+        if let Some(task) = take.fetch_optional(pool).await? {
+            return Ok(Some(task));
+        }
     }
-    Ok(take.fetch_optional(pool).await?)
+    Ok(None)
 }
 
 /// `true`, если именно этот вызов перевёл задачу из `IN_PROGRESS` в `COMPLETED`.

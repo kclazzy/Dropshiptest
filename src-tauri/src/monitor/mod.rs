@@ -44,18 +44,26 @@ pub async fn schedule_due(pool: &SqlitePool, now: i64) -> AppResult<usize> {
             .fetch_all(pool)
             .await?;
     let mut queued = 0;
+    // Одна транзакция на пачку: по отдельной фиксации на каждый товар было ~2 мс (профиль, шаг 8).
+    let mut tx = pool.begin().await?;
     for (product_id, interval) in due {
         let payload = json!({ "product_id": product_id }).to_string();
         let open: Option<i64> = sqlx::query_scalar("SELECT id FROM task_queue WHERE task_type = 'PRICE_SYNC' AND status IN ('PENDING','IN_PROGRESS') AND payload_json = ?")
             .bind(&payload)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?;
         if open.is_none() {
-            db::enqueue_task(pool, TaskType::PriceSync, PRICE_SYNC_PRIORITY, &payload, now, 3).await?;
+            sqlx::query("INSERT INTO task_queue (task_type, priority, payload_json, scheduled_at, max_attempts) VALUES ('PRICE_SYNC', ?, ?, ?, 3)")
+                .bind(PRICE_SYNC_PRIORITY)
+                .bind(&payload)
+                .bind(now)
+                .execute(&mut *tx)
+                .await?;
             queued += 1;
         }
-        sqlx::query("UPDATE products SET next_check_at = ? WHERE id = ?").bind(now + interval.max(60)).bind(product_id).execute(pool).await?;
+        sqlx::query("UPDATE products SET next_check_at = ? WHERE id = ?").bind(now + interval.max(60)).bind(product_id).execute(&mut *tx).await?;
     }
+    tx.commit().await?;
     Ok(queued)
 }
 

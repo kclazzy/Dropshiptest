@@ -88,7 +88,6 @@ pub async fn apply_variant_state(
     Ok(ApplyOutcome::Updated { priced: breakdown.is_some() })
 }
 
-/// Магазин по умолчанию («Мой каталог», без площадки), чтобы импорт работал до подключения Ozon/Avito.
 /// Пересчитывает розничные цены всех вариантов магазина по текущим правилам (после смены правил).
 pub async fn recalculate_store(pool: &SqlitePool, store_id: i64, now: i64) -> AppResult<usize> {
     let mut tx = pool.begin().await?;
@@ -111,6 +110,7 @@ pub async fn recalculate_store(pool: &SqlitePool, store_id: i64, now: i64) -> Ap
     Ok(changed)
 }
 
+/// Магазин по умолчанию («Мой каталог», без площадки), чтобы импорт работал до подключения Ozon/Avito.
 pub async fn ensure_default_store(pool: &SqlitePool, now: i64) -> AppResult<i64> {
     if let Some(id) = sqlx::query_scalar::<_, i64>("SELECT id FROM stores ORDER BY id LIMIT 1").fetch_optional(pool).await? {
         return Ok(id);

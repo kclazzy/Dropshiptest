@@ -2,6 +2,8 @@
 
 pub mod ai;
 pub mod bridge;
+#[cfg(test)]
+mod bench;
 pub mod catalog;
 pub mod categories;
 pub mod commands;
