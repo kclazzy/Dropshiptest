@@ -95,13 +95,21 @@ pub async fn ingest_orders(pool: &SqlitePool, store_id: i64, orders: &[StoreOrde
     let mut report = IngestReport::default();
     for o in orders {
         validate(o)?;
-        let variant: Option<i64> = sqlx::query_scalar(
-            "SELECT v.id FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.store_id = ? AND v.external_variant_id = ? LIMIT 1",
-        )
-        .bind(store_id)
-        .bind(&o.external_variant_id)
-        .fetch_optional(pool)
-        .await?;
+        // «#42» — внутренний номер варианта (ручной ввод заказа); иначе — id товара на площадке.
+        let variant: Option<i64> = match o.external_variant_id.strip_prefix('#').and_then(|n| n.parse::<i64>().ok()) {
+            Some(id) => {
+                sqlx::query_scalar("SELECT v.id FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.store_id = ? AND v.id = ?").bind(store_id).bind(id).fetch_optional(pool).await?
+            }
+            None => {
+                sqlx::query_scalar(
+                    "SELECT v.id FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.store_id = ? AND v.external_variant_id = ? LIMIT 1",
+                )
+                .bind(store_id)
+                .bind(&o.external_variant_id)
+                .fetch_optional(pool)
+                .await?
+            }
+        };
         let id: Option<i64> = sqlx::query_scalar(
             "INSERT INTO orders (store_id, external_order_id, variant_id, quantity, buyer_address_json, retail_total_minor, status, created_at, updated_at) \
              VALUES (?, ?, ?, ?, ?, ?, 'NEW', ?, ?) ON CONFLICT(external_order_id) DO NOTHING RETURNING id",

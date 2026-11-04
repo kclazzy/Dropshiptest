@@ -183,16 +183,24 @@ pub async fn start(pool: SqlitePool, vault: Arc<CredentialVault>, cancel: Cancel
         Err(e) => tracing::error!(error = %e, "не удалось запустить мост (порт 8765 занят?)"),
     }
 
-    match crate::ai::store::load_generator(&pool, &vault).await {
+    tokio::spawn(monitor_loop(pool, vault, state.clone(), cancel));
+    state
+}
+
+/// (Пере)запускает обработчик ИИ-очереди с актуальными настройками. Старый останавливается.
+pub async fn restart_ai(state: &crate::AppState) {
+    let token = state.shutdown.child_token();
+    let previous = state.ai_worker.lock().ok().and_then(|mut slot| slot.replace(token.clone()));
+    if let Some(old) = previous {
+        old.cancel();
+    }
+    match crate::ai::store::load_generator(&state.pool, &state.vault).await {
         Ok((generator, language)) => {
             let filter = Arc::new(crate::ai::stopwords::StopWordFilter::new(&[]));
-            tokio::spawn(crate::ai::worker::run_ai_worker(pool.clone(), generator, filter, language, now_secs, cancel.clone()));
+            tokio::spawn(crate::ai::worker::run_ai_worker(state.pool.clone(), generator, filter, language, now_secs, token));
         }
         Err(e) => tracing::warn!(error = %e, "ИИ не настроен: генерация карточек отключена"),
     }
-
-    tokio::spawn(monitor_loop(pool, vault, state.clone(), cancel));
-    state
 }
 
 #[cfg(test)]

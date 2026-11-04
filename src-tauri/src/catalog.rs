@@ -89,6 +89,28 @@ pub async fn apply_variant_state(
 }
 
 /// Магазин по умолчанию («Мой каталог», без площадки), чтобы импорт работал до подключения Ozon/Avito.
+/// Пересчитывает розничные цены всех вариантов магазина по текущим правилам (после смены правил).
+pub async fn recalculate_store(pool: &SqlitePool, store_id: i64, now: i64) -> AppResult<usize> {
+    let mut tx = pool.begin().await?;
+    let rules = load_rule_set(&mut tx, store_id).await?;
+    let variants: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT v.id, v.supplier_price_minor, v.shipping_price_minor, v.supplier_stock FROM product_variants v JOIN products p ON p.id = v.product_id WHERE p.store_id = ?",
+    )
+    .bind(store_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut changed = 0;
+    for (id, price, shipping, stock) in variants {
+        // Сбрасываем хэш, иначе «то же состояние» пропустит пересчёт.
+        sqlx::query("UPDATE product_variants SET state_hash = '' WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        if !matches!(apply_variant_state(&mut tx, rules.as_ref(), id, price, shipping, stock, now).await?, ApplyOutcome::Unchanged) {
+            changed += 1;
+        }
+    }
+    tx.commit().await?;
+    Ok(changed)
+}
+
 pub async fn ensure_default_store(pool: &SqlitePool, now: i64) -> AppResult<i64> {
     if let Some(id) = sqlx::query_scalar::<_, i64>("SELECT id FROM stores ORDER BY id LIMIT 1").fetch_optional(pool).await? {
         return Ok(id);

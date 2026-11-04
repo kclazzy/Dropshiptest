@@ -46,6 +46,11 @@ pub async fn save_settings(
     Ok(())
 }
 
+/// Есть ли сохранённый ключ (сам ключ наружу не отдаётся).
+pub async fn has_key(pool: &SqlitePool) -> AppResult<bool> {
+    Ok(settings::get(pool, KEY_KEY).await?.is_some())
+}
+
 async fn load_key(pool: &SqlitePool, vault: &CredentialVault) -> AppResult<Option<String>> {
     let Some(hex) = settings::get(pool, KEY_KEY).await? else { return Ok(None) };
     let blob = hex_decode(&hex).ok_or_else(|| AppError::Validation("сохранённый ключ ИИ повреждён".into()))?;

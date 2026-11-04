@@ -3,6 +3,7 @@
 pub mod ai;
 pub mod bridge;
 pub mod catalog;
+pub mod commands;
 pub mod db;
 pub mod error;
 pub mod import;
@@ -13,6 +14,9 @@ pub mod security;
 pub mod services;
 pub mod settings;
 pub mod stores;
+pub mod tray;
+pub mod ui;
+pub mod update;
 pub mod sync;
 #[cfg(test)]
 pub mod testutil;
@@ -30,6 +34,8 @@ pub struct AppState {
     pub vault: std::sync::Arc<security::CredentialVault>,
     pub bridge: std::sync::Arc<bridge::BridgeState>,
     pub shutdown: tokio_util::sync::CancellationToken,
+    /// Токен отмены текущего ИИ-обработчика: при смене настроек ИИ он перезапускается.
+    pub ai_worker: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 /// Параметры визуального калькулятора прибыли (суммы в копейках, проценты как на ползунках).
@@ -81,6 +87,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let pool = tauri::async_runtime::block_on(db::init_pool(&data_dir.join("dropship.db")))?;
@@ -88,10 +95,49 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let vault = std::sync::Arc::new(security::CredentialVault::open_or_create(&data_dir.join("secret.key"))?);
             let shutdown = tokio_util::sync::CancellationToken::new();
             let bridge = tauri::async_runtime::block_on(services::start(pool.clone(), vault.clone(), shutdown.clone()));
-            app.manage(AppState { pool, vault, bridge, shutdown });
+            let ai_worker = std::sync::Mutex::new(None);
+            app.manage(AppState { pool, vault, bridge, shutdown, ai_worker });
+            let state = app.state::<AppState>();
+            tauri::async_runtime::block_on(services::restart_ai(&state));
+            tray::install(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![price_breakdown])
+        .on_window_event(tray::keep_in_tray)
+        .invoke_handler(tauri::generate_handler![
+            price_breakdown,
+            commands::list_products,
+            commands::product_detail,
+            commands::update_product_text,
+            commands::retry_ai,
+            commands::link_variant,
+            commands::set_monitoring,
+            commands::delete_product,
+            commands::list_stores,
+            commands::add_store,
+            commands::set_store_active,
+            commands::delete_store,
+            commands::list_rules,
+            commands::save_rules,
+            commands::standard_rule,
+            commands::list_proxies,
+            commands::add_proxy,
+            commands::remove_proxy,
+            commands::onboarding_state,
+            commands::setup_default_catalog,
+            commands::finish_onboarding,
+            commands::get_ai_settings,
+            commands::save_ai_settings,
+            commands::list_orders,
+            commands::add_manual_order,
+            commands::order_action,
+            commands::order_mark_ordered,
+            commands::order_set_tracking,
+            commands::start_pairing,
+            commands::extension_status,
+            commands::revoke_extension,
+            commands::check_update,
+            commands::open_release_page,
+        ])
         .run(tauri::generate_context!())?;
     Ok(())
 }
